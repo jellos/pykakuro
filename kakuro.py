@@ -12,11 +12,11 @@
 #      |\ |\
 #      |7\|6\
 #   |\4|  |  |
-#   |4\|--|--|
+#   |4\|--+--+
 # \7|  |  |  |
-#  \|--|--|--|
+#  \|--|--+--+
 # \6|  |  |  |
-#  \|--|--|--|
+#  \|--+--+--+
 #
 # To represent the board, we use a 0 for the cells that don't take a number and
 # a 1 for the cells that do. Constraint squares are a tuple of two integers,
@@ -25,39 +25,38 @@
 # the integer should be 0. Here is the puzzle shown above in this format:
 #
 #  0 | 0 |0,7|0,6|
-# ---|---|---|---|
+# ---+---+---+---+
 #  0 |4,4| 1 | 1 |
-# ---|---|---|---|
+# ---+---+---+---+
 # 7,0| 1 | 1 | 1 |
-# ---|---|---|---|
+# ---+---+---+---+
 # 6,0| 1 | 1 | 1 |
-# ---|---|---|---|
+# ---+---+---+---+
 #
-# And here is the same puzzle encoded in the input format this program uses:
-
-sample_puzzle = (0 ,   0 ,(0,7),(0,6),
-                 0 ,(4,4),   1 ,   1 ,
-              (7,0),   1 ,   1 ,   1 ,
-              (6,0),   1 ,   1 ,   1 ,
-                )
-x_size = 4
-
+# And here is the same puzzle encoded in the canonical format used by this
+# program:
+#
+# sample_puzzle = (0 ,   0 ,(0,7),(0,6),
+#                  0 ,(4,4),   1 ,   1 ,
+#               (7,0),   1 ,   1 ,   1 ,
+#               (6,0),   1 ,   1 ,   1 ,
+#                 )
+#
 # When we call solve, we get back an output string:
-# >>> kakuro.solve(sample_puzzle, x_size)
+# >>> kakuro.solve(sample_puzzle, 4)
 # [0, 0, (0, 7), (0, 6), 0, (4, 4), 1, 3, (7, 0), 1, 4, 2, (6, 0), 3, 2, 1]
 #
-# In the grid form, that looks something like this:
+# In the grid form, that looks like this:
+# >>> print kakuro.data_to_grid(result,4)
 #
 #  0 | 0 |0,7|0,6|
-# ---|---|---|---|
+# ---+---+---+---+
 #  0 |4,4| 1 | 3 |
-# ---|---|---|---|
+# ---+---+---+---+
 # 7,0| 1 | 4 | 2 |
-# ---|---|---|---|
+# ---+---+---+---+
 # 6,0| 3 | 2 | 1 |
-# ---|---|---|---|
-#
-# As you can see, the puzzle is solved.
+# ---+---+---+---+
 #
 # Various options affect the solving routines:
 #
@@ -66,6 +65,25 @@ x_size = 4
 ONE_TO_NINE_EXCLUSIVE = False
 
 #############################################################################
+
+def data_to_grid(data, x_size):
+  """Quick util func to draw prettier version of puzzle strings"""
+  strings = []
+  for x in data:
+    if type(x) == type(()):
+      strings.append(','.join(str(y) for y in x))
+    else:
+      strings.append(str(x))
+  cell_width = max(len(x) for x in strings)
+  centered = [x.center(cell_width) for x in strings]
+  by_row = [centered[z:z+x_size] for z in range(0,len(data)-x_size+1,x_size)]
+  separator = '+'.join(["-"*cell_width]*x_size) + '+'
+  row_strings = ['|'.join(x)+'|' for x in by_row]
+  y=len(row_strings)
+  for x in range(y):
+    row_strings.insert(y-x, separator)
+
+  return '\n'.join((row_strings))
 
 def solve(input, x_size):
   y_size = len(sample_puzzle) / x_size
@@ -88,10 +106,10 @@ def solve(input, x_size):
   for col in cols:
     constraints.extend(process_row_or_col(col, DOWN))
 
-  iterate(constraints)
-  iterate(constraints)
-  iterate(constraints)
-  iterate(constraints)
+  for i in range(1000):
+    if iterate(constraints): break
+  else:
+    raise Exception("Max Iterations Exceeded (board too large or unsolvable)")
 
   return [x.pop() if type(x)==type(set()) else x for x in a]
 
@@ -115,8 +133,9 @@ def process_row_or_col(row, row_or_col):
           raise MalformedBoardException("Constraint without adjacent '1'")
         constraint.append(cell)
         try:
-          while cell == set():
+          while True:
             cell = row.pop()
+            if cell != set(): break
             constraint.append(cell)
         except IndexError: pass
         constraints.append(constraint)
@@ -129,8 +148,35 @@ from itertools import combinations
 from itertools import chain
 
 def get_vals(n_sum, num_boxes):
-  return [x for x in combinations(range(1, n_sum),num_boxes) if sum(x) == n_sum]
+  return [x for x in combinations(range(1, n_sum),num_boxes) if
+          sum(x) == n_sum and all(y<10 for y in x)]
 
+class memoized(object):
+  """Decorator that caches a function's return value each time it is called.
+  If called later with the same arguments, the cached value is returned, and
+  not re-evaluated.
+
+  Found at http://wiki.python.org/moin/PythonDecoratorLibrary#Memoize
+  """
+  def __init__(self, func):
+    self.func = func
+    self.cache = {}
+  def __call__(self, *args):
+    try:
+      return self.cache[args]
+    except KeyError:
+      self.cache[args] = value = self.func(*args)
+      return value
+    except TypeError:
+      # uncachable -- for instance, passing a list as an argument.
+      # Better to not cache than to blow up entirely.
+      return self.func(*args)
+  def __repr__(self):
+    """Return the function's docstring."""
+    return self.func.__doc__
+
+
+@memoized
 def get_set(n_sum, num_boxes):
   def flatten(listOfLists):
     return list(chain.from_iterable(listOfLists))
@@ -144,13 +190,25 @@ def update_constraint(c, sum, num):
 
 def iterate(constraints):
   """This is the solver's main loop."""
+  solved = True
+  from itertools import product
+
   for c in constraints:
+    sum_val = c[0]
     for x in range(1,len(c)):
-      update_constraint(c[x], c[0], len(c) - 1)
+      update_constraint(c[x], sum_val, len(c) - 1)
+
+  for c in constraints:
+    sum_val = c[0]
+    for x in range(1,len(c)):
+      c[x].intersection_update([y[x-1] for y in product(*c[1:]) if sum(y)==sum_val])
       if len(c[x]) == 1:
         for y in range(1,len(c)):
           if x != y:
             c[y]-=c[x]
+      else:
+        solved = False
+  return solved
 
 
 
