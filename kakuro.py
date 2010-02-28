@@ -164,7 +164,7 @@ def iterate(constraints):
 
 # To solve the puzzle, we call solve(sample_puzzle, constraints=False)
 
-# Copyright (c) 2010 Brandon Thomson
+# Copyright (c) 2010 Brandon Thomson <brandon.j.thomson@gmail.com>
 #
 # Permission is hereby granted, free of charge, to any person
 # obtaining a copy of this software and associated documentation
