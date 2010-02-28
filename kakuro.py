@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-# Kakuro Solver
+# pykakuro - Kakuro Tools For Python
 # Copyright (c) 2010 Brandon Thomson <brandon.j.thomson@gmail.com>
 # Made available under an MIT license, terms at bottom of file
 
@@ -20,8 +20,8 @@
 #
 # To represent the board, we use a 0 for the cells that don't take a number and
 # a 1 for the cells that do. Constraint squares are a tuple of two integers,
-# with the first being the constraint across and the second being the
-# constraint down. If no constraint is specified for a particular direction,
+# with the first being the constraint ACROSS and the second being the
+# constraint DOWN. If no constraint is specified for a particular direction,
 # the integer should be 0. Here is the puzzle shown above in this format:
 #
 #  0 | 0 |0,7|0,6|
@@ -35,26 +35,65 @@
 #
 # And here is the same puzzle encoded in the input format this program uses:
 
-sample_puzzle = (   0 ,   0 ,(0,7),(0,6),
-                    0 ,(4,4),   1 ,   1 ,
-                 (7,0),   1 ,   1 ,   1 ,
-                 (6,0),   1 ,   1 ,   1 ,
+sample_puzzle = (0 ,   0 ,(0,7),(0,6),
+                 0 ,(4,4),   1 ,   1 ,
+              (7,0),   1 ,   1 ,   1 ,
+              (6,0),   1 ,   1 ,   1 ,
                 )
 x_size = 4
 
-###
+# When we call solve, we get back an output string:
+# >>> kakuro.solve(sample_puzzle, x_size)
+# [0, 0, (0, 7), (0, 6), 0, (4, 4), 1, 3, (7, 0), 1, 4, 2, (6, 0), 3, 2, 1]
+#
+# In the grid form, that looks something like this:
+#
+#  0 | 0 |0,7|0,6|
+# ---|---|---|---|
+#  0 |4,4| 1 | 3 |
+# ---|---|---|---|
+# 7,0| 1 | 4 | 2 |
+# ---|---|---|---|
+# 6,0| 3 | 2 | 1 |
+# ---|---|---|---|
+#
+# As you can see, the puzzle is solved.
+#
+# Various options affect the solving routines:
+#
+# Setting this to true enforces an additonal constraint that only the integers
+# 1 through 9 can be placed in each box.
+ONE_TO_NINE_EXCLUSIVE = False
 
-ACROSS = 0
-DOWN = 1
+#############################################################################
 
-y_size = len(sample_puzzle) / x_size
+def solve(input, x_size):
+  y_size = len(sample_puzzle) / x_size
 
-a=[set() if x==1 else x for x in sample_puzzle]
+  # To make the script more space and time efficient, each cell can be
+  # represented as an integer and we can use bitwise operations to indicate
+  # which integers are allowed in the slot.  Unfortunately this also makes the
+  # code somewhat harder to read. Set operations are a natural fit for
+  # readability since we are talking about possibilities for each cell.
+  a=[set() if x==1 else x for x in input]
+  rows = [a[z:z+x_size] for z in range(0,len(a)-x_size+1,x_size)]
+  cols = [a[z::x_size] for z in range(4)]
 
-rows = [a[z:z+x_size] for z in range(0,len(a)-x_size+1,x_size)]
-cols = [a[z::x_size] for z in range(4)]
+  constraints = []
+  ACROSS = 0
+  DOWN = 1
+  for row in rows:
+    constraints.extend(process_row_or_col(row, ACROSS))
 
-constraints = []
+  for col in cols:
+    constraints.extend(process_row_or_col(col, DOWN))
+
+  iterate(constraints)
+  iterate(constraints)
+  iterate(constraints)
+  iterate(constraints)
+
+  return [x.pop() if type(x)==type(set()) else x for x in a]
 
 class MalformedBoardException(Exception): pass
 
@@ -86,19 +125,41 @@ def process_row_or_col(row, row_or_col):
 
   return constraints
 
-for row in rows:
-  constraints.extend(process_row_or_col(row, ACROSS))
+from itertools import combinations
+from itertools import chain
 
-for col in cols:
-  constraints.extend(process_row_or_col(col, DOWN))
+def get_vals(n_sum, num_boxes):
+  return [x for x in combinations(range(1, n_sum),num_boxes) if sum(x) == n_sum]
 
-for c in constraints:
-  for x in range(1,len(c)):
-    c[x].update(set(range(1, c[0])))
+def get_set(n_sum, num_boxes):
+  def flatten(listOfLists):
+    return list(chain.from_iterable(listOfLists))
+  return set(flatten(get_vals(n_sum, num_boxes)))
 
-for c in constraints:
-  for x in range(1,len(c)):
-    c[x].intersection_update(set(range(1, c[0])))
+def update_constraint(c, sum, num):
+  if c:
+    c.intersection_update(get_set(sum, num))
+  else:
+    c.update(get_set(sum, num))
+
+def iterate(constraints):
+  """This is the solver's main loop."""
+  for c in constraints:
+    for x in range(1,len(c)):
+      update_constraint(c[x], c[0], len(c) - 1)
+      if len(c[x]) == 1:
+        for y in range(1,len(c)):
+          if x != y:
+            c[y]-=c[x]
+
+
+
+# http://www.kevinpluck.net/kakuro/KakuroCombinations.html
+# Sum=3, Boxes=2: 12
+# Sum=4, Boxes=2: 13
+# Sum=5, Boxes=2: 14, 23
+# Sum=5, Boxes=2: 15, 24
+# Sum=5, Boxes=3: 123
 
 
 # To solve the puzzle, we call solve(sample_puzzle, constraints=False)
