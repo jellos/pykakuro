@@ -66,6 +66,10 @@ ONE_TO_NINE_EXCLUSIVE = False
 
 #############################################################################
 
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
+
 def data_to_grid(data, x_size):
   """Quick util func to draw prettier version of puzzle strings"""
   strings = []
@@ -86,7 +90,7 @@ def data_to_grid(data, x_size):
   return '\n'.join((row_strings))
 
 def solve(input, x_size):
-  y_size = len(sample_puzzle) / x_size
+  y_size = len(input) / x_size
 
   # To make the script more space and time efficient, each cell can be
   # represented as an integer and we can use bitwise operations to indicate
@@ -95,7 +99,7 @@ def solve(input, x_size):
   # readability since we are talking about possibilities for each cell.
   a=[set() if x==1 else x for x in input]
   rows = [a[z:z+x_size] for z in range(0,len(a)-x_size+1,x_size)]
-  cols = [a[z::x_size] for z in range(4)]
+  cols = [a[z::x_size] for z in range(x_size)]
 
   constraints = []
   ACROSS = 0
@@ -106,10 +110,15 @@ def solve(input, x_size):
   for col in cols:
     constraints.extend(process_row_or_col(col, DOWN))
 
-  for i in range(1000):
+
+  for i in range(200):
+    old = str(constraints)
     if iterate(constraints): break
-  else:
-    raise Exception("Max Iterations Exceeded (board too large or unsolvable)")
+    if old == str(constraints):
+      logging.debug("Begining speculative evaluation")
+      unsatisfied = [c for c in constraints if any(len(x) > 1 for x in c[1:])]
+      solutions = [[y for y in product(*x[1:]) if sum(y)==x[0]] for x in a]
+      break
 
   return [x.pop() if type(x)==type(set()) else x for x in a]
 
@@ -124,7 +133,7 @@ def process_row_or_col(row, row_or_col):
     if cell == 0:
       pass
     elif cell == set():
-      raise MalformedBoardException("'1' without adjacent constraint")
+      pass
     elif type(cell) == type(()):
       if cell[row_or_col]:
         constraint = [cell[row_or_col]]
@@ -135,7 +144,9 @@ def process_row_or_col(row, row_or_col):
         try:
           while True:
             cell = row.pop()
-            if cell != set(): break
+            if cell != set():
+              row.append(cell)
+              break
             constraint.append(cell)
         except IndexError: pass
         constraints.append(constraint)
@@ -191,6 +202,7 @@ def update_constraint(c, sum, num):
 def iterate(constraints):
   """This is the solver's main loop."""
   solved = True
+
   from itertools import product
 
   for c in constraints:
