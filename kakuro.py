@@ -2,8 +2,22 @@
 # -*- coding: utf-8 -*-
 
 # pykakuro - Kakuro Tools For Python
-# Copyright (c) 2010 Brandon Thomson <brandon.j.thomson@gmail.com>
-# Made available under an MIT license, terms at bottom of file
+# Copyright (C) 2010 Brandon Thomson <brandon.j.thomson@gmail.com>
+#
+# This program is free software: you can redistribute it and/or modify it under
+# the terms of the GNU Affero General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your option) any
+# later version.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+# FOR A PARTICULAR PURPOSE.  See the GNU Affero General Public License for more
+# details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+##############################################################################
 
 # Kakuro boards don't really lend themselves to being drawn in ASCII, but we'll
 # give it a shot. Here's a board the way you might see it drawn in a puzzle
