@@ -123,6 +123,17 @@ def data_to_grid(data, x_size):
 def is_solved(constraints):
     return all(all(len(x.set) == 1 for x in c[1:]) for c in constraints)
 
+class Success(Exception): pass
+
+def recursive_cell_test(constraints, cells, n):
+  try:
+    for i in cells[n].set:
+      cells[n].test = i
+      recursive_cell_test(constraints, cells, n+1)
+  except IndexError:
+    if are_constraints_satisfied(constraints):
+      raise Success
+
 def solve(input, x_size):
   y_size = len(input) / x_size
 
@@ -153,14 +164,32 @@ def solve(input, x_size):
     old = str(constraints)
     iterate(constraints)
     if is_solved(constraints):
-      break
+      return [x.set.copy().pop() if isinstance(x, Cell)  else x for x in a]
     if old == str(constraints):
       logging.debug("Begining speculative evaluation")
-      #unsatisfied = [c for c in constraints if any(len(x) > 1 for x in c[1:])]
-      #solutions = [[y for y in product(*x[1:]) if sum(y)==x[0]] for x in a]
-      break
+      unsatisfied = [c for c in constraints if any(len(x.set) > 1 for x in c[1:])]
+      cells = []
 
-  return [x.set.copy().pop() if isinstance(x, Cell) else x for x in a]
+      # set .tests
+      for c in constraints:
+        for x in c[1:]:
+          if len(x.set) == 1:
+            x.test = x.set.pop()
+
+
+      for c in unsatisfied:
+        for x in c[1:]:
+          if len(x.set) > 1:
+            cells.append(x)
+
+      try:
+        recursive_cell_test(constraints, cells, 0)
+      except Success:
+        return [x.test if isinstance(x, Cell)  else x for x in a]
+
+
+def are_constraints_satisfied(constraints):
+  return all(x[0] == sum(y.test for y in x[1:]) for x in constraints)
 
 class MalformedBoardException(Exception): pass
 
@@ -234,24 +263,28 @@ def first_run(constraints):
     num_boxes = len(c) - 1
     for x in c[1:]:
       x.set &= get_set(sum_val, num_boxes)
-      print sum_val, num_boxes, x.set
 
-def iterate(constraints):
-  """This is the solver's main loop."""
-  print constraints
+def remove_duplicates(cells):
+  for cell1 in cells:
+    if len(cell1.set) == 1:
+      for cell2 in cells:
+        if cell1 is not cell2:
+          cell2.set -= cell1.set;
 
+def remove_invalid_sums(cells, sum_val):
   from itertools import product
 
-  for c in constraints:
-    sum_val = c[0]
-    print sum_val
-    cells = c[1:]
-    sets = (cell.set for cell in cells)
-    new_sets = zip(*[seq for seq in product(*sets) if sum(seq)==sum_val])
-    for old, new in zip(cells, new_sets):
-      print old.set, "->", new
-      old.set &= set(new)
+  sets = (cell.set for cell in cells)
+  new_sets = zip(*(seq for seq in product(*sets) if sum(seq)==sum_val))
+  for old, new in zip(cells, new_sets):
+    old.set &= set(new)
 
+def iterate(constraints):
+  """The strategy is to run this repeatedly until it stops making progress"""
+  for c in constraints:
+    sum_val, cells = c[0], c[1:]
+    remove_duplicates(cells)
+    remove_invalid_sums(cells, sum_val)
 
 
 # http://www.kevinpluck.net/kakuro/KakuroCombinations.html
