@@ -76,7 +76,11 @@
 #
 # Setting this to true enforces an additonal constraint that only the integers
 # 1 through 9 can be placed in each box.
-ONE_TO_NINE_EXCLUSIVE = False
+ONE_TO_NINE_EXCLUSIVE = True
+
+# Setting this to true enforces that constraint blocks cannot have identical
+# numbers in them.
+IDENTICAL_EXCLUSION = True
 
 #############################################################################
 
@@ -283,8 +287,9 @@ def iterate(constraints):
   """The strategy is to run this repeatedly until it stops making progress"""
   for c in constraints:
     sum_val, cells = c[0], c[1:]
-    remove_duplicates(cells)
-    remove_invalid_sums(cells, sum_val)
+    if IDENTICAL_EXCLUSION:
+      _remove_duplicates(cells)
+    _remove_invalid_sums(cells, sum_val)
 
 
 # http://www.kevinpluck.net/kakuro/KakuroCombinations.html
