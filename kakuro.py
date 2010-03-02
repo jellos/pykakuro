@@ -104,8 +104,8 @@ class Cell(object):
         return "Cell(%d)" % x
     return "Cell(%s)" % list(self.set)
 
-def _verify_board_integrity(data, x_size):
-  if len(data) % x_size != 4:
+def _verify_input_integrity(data, x_size):
+  if len(data) % x_size != 0:
     raise MalformedBoardException("The input data must be square in shape.")
 
   for x in data:
@@ -116,7 +116,7 @@ def _verify_board_integrity(data, x_size):
 
 def data_to_grid(data, x_size):
   """Quick util func to draw prettier version of puzzle strings"""
-  _verify_board_integrity(data, x_size)
+  _verify_input_integrity(data, x_size)
 
   strings = []
   for x in data:
@@ -149,10 +149,52 @@ def _recursive_cell_test(constraints, cells, n):
     if _are_constraints_satisfied(constraints):
       raise Success
 
-def solve(input, x_size):
-  _verify_board_integrity(input, x_size)
+def verify_solution(input, x_size):
+  _verify_input_integrity(input, x_size)
 
-  y_size = len(input) / x_size
+  def is_entry_square(cell):
+    return cell != 0 and type(cell) == type(1)
+
+  constraints = _generate_constraints(input, x_size, is_entry_square)
+
+  print constraints
+
+  s=all(x[0] == sum(y for y in x[1:]) for x in constraints)
+  if s:
+    print "Valid Solution"
+    return True
+  else:
+    print "Invalid Solution"
+    return False
+
+def _generate_constraints(input, x_size, is_entry_square):
+  """
+  Creates a list of constraints based on given input. If the input contains
+  objects, the objects will be multiply referenced in the output list where
+  constraints overlap.
+
+  is_entry_square - a function provided by the caller that returns true if a
+  cell provided to the function is a square where a number needs to go. (This
+  allows this function to be agnostic of whether objects or simple numbers are
+  used in the list.)
+  """
+  rows = [input[z:z+x_size] for z in range(0,len(input)-x_size+1,x_size)]
+  cols = [input[z::x_size] for z in range(x_size)]
+
+  constraints = []
+  ACROSS = 0
+  DOWN = 1
+
+  for row in rows:
+    constraints.extend(_process_row_or_col(row, ACROSS, is_entry_square))
+
+  for col in cols:
+    constraints.extend(_process_row_or_col(col, DOWN, is_entry_square))
+
+  return constraints
+
+def solve(input, x_size):
+  _verify_input_integrity(input, x_size)
 
   #TODO: validate input
   #raise MalformedBoardException("{0} not a valid token".format(cell))
@@ -163,17 +205,11 @@ def solve(input, x_size):
   # code somewhat harder to read. Set operations are a natural fit for
   # readability since we are talking about possibilities for each cell.
   a=[Cell() if x==1 else x for x in input]
-  rows = [a[z:z+x_size] for z in range(0,len(a)-x_size+1,x_size)]
-  cols = [a[z::x_size] for z in range(x_size)]
 
-  constraints = []
-  ACROSS = 0
-  DOWN = 1
-  for row in rows:
-    constraints.extend(_process_row_or_col(row, ACROSS))
+  def is_entry_square(cell):
+    return isinstance(cell, Cell)
 
-  for col in cols:
-    constraints.extend(_process_row_or_col(col, DOWN))
+  constraints = _generate_constraints(a, x_size, is_entry_square)
 
   _first_run(constraints)
 
@@ -210,7 +246,7 @@ def _are_constraints_satisfied(constraints):
 
 class MalformedBoardException(Exception): pass
 
-def _process_row_or_col(record, row_or_col):
+def _process_row_or_col(record, row_or_col, is_entry_square):
   constraints = []
 
   record.reverse()
@@ -221,13 +257,13 @@ def _process_row_or_col(record, row_or_col):
       if sum_val != 0:
         constraint = [sum_val]
         cell = record.pop()
-        if not isinstance(cell, Cell):
+        if not is_entry_square(cell):
           raise MalformedBoardException("Constraint without adjacent '1'")
         constraint.append(cell)
         try:
           while True:
             cell = record.pop()
-            if not isinstance(cell, Cell):
+            if not is_entry_square(cell):
               record.append(cell) #unpop
               break
             constraint.append(cell)
