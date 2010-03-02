@@ -104,9 +104,20 @@ class Cell(object):
         return "Cell(%d)" % x
     return "Cell(%s)" % list(self.set)
 
+def _verify_board_integrity(data, x_size):
+  if len(data) % x_size != 4:
+    raise MalformedBoardException("The input data must be square in shape.")
+
+  for x in data:
+    if (type(x) != type(0)) and (type(x) != type(())):
+      raise MalformedBoardException("Only tuples and integers are allowed in "
+                                    "the input.")
+
 
 def data_to_grid(data, x_size):
   """Quick util func to draw prettier version of puzzle strings"""
+  _verify_board_integrity(data, x_size)
+
   strings = []
   for x in data:
     if type(x) == type(()):
@@ -124,21 +135,23 @@ def data_to_grid(data, x_size):
 
   return '\n'.join((row_strings))
 
-def is_solved(constraints):
+def _is_solved(constraints):
     return all(all(len(x.set) == 1 for x in c[1:]) for c in constraints)
 
 class Success(Exception): pass
 
-def recursive_cell_test(constraints, cells, n):
+def _recursive_cell_test(constraints, cells, n):
   try:
     for i in cells[n].set:
       cells[n].test = i
-      recursive_cell_test(constraints, cells, n+1)
+      _recursive_cell_test(constraints, cells, n+1)
   except IndexError:
-    if are_constraints_satisfied(constraints):
+    if _are_constraints_satisfied(constraints):
       raise Success
 
 def solve(input, x_size):
+  _verify_board_integrity(input, x_size)
+
   y_size = len(input) / x_size
 
   #TODO: validate input
@@ -157,17 +170,17 @@ def solve(input, x_size):
   ACROSS = 0
   DOWN = 1
   for row in rows:
-    constraints.extend(process_row_or_col(row, ACROSS))
+    constraints.extend(_process_row_or_col(row, ACROSS))
 
   for col in cols:
-    constraints.extend(process_row_or_col(col, DOWN))
+    constraints.extend(_process_row_or_col(col, DOWN))
 
-  first_run(constraints)
+  _first_run(constraints)
 
   for i in range(200):
     old = str(constraints)
-    iterate(constraints)
-    if is_solved(constraints):
+    _iterate(constraints)
+    if _is_solved(constraints):
       return [x.set.copy().pop() if isinstance(x, Cell)  else x for x in a]
     if old == str(constraints):
       logging.debug("Begining speculative evaluation")
@@ -187,17 +200,17 @@ def solve(input, x_size):
             cells.append(x)
 
       try:
-        recursive_cell_test(constraints, cells, 0)
+        _recursive_cell_test(constraints, cells, 0)
       except Success:
         return [x.test if isinstance(x, Cell)  else x for x in a]
 
 
-def are_constraints_satisfied(constraints):
+def _are_constraints_satisfied(constraints):
   return all(x[0] == sum(y.test for y in x[1:]) for x in constraints)
 
 class MalformedBoardException(Exception): pass
 
-def process_row_or_col(record, row_or_col):
+def _process_row_or_col(record, row_or_col):
   constraints = []
 
   record.reverse()
@@ -226,9 +239,19 @@ def process_row_or_col(record, row_or_col):
 from itertools import combinations
 from itertools import chain
 
-def get_vals(n_sum, num_boxes):
-  return [x for x in combinations(range(1, n_sum),num_boxes) if
-          sum(x) == n_sum and all(y<10 for y in x)]
+def get_vals(sum_val, n):
+  """
+  Returns a list of tuples of all the combinations of n integers that sum to
+  sum_val.
+
+  >>> get_vals(10, 3)
+  [(1, 2, 7), (1, 3, 6), (1, 4, 5), (2, 3, 5)]
+
+  >>> get_vals(7, 3)
+  [(1, 2, 4)]
+  """ 
+  return [x for x in combinations(range(1, sum_val),n) if
+          sum(x) == sum_val and all(y<10 for y in x)]
 
 class memoized(object):
   """Decorator that caches a function's return value each time it is called.
@@ -256,26 +279,50 @@ class memoized(object):
 
 
 @memoized
-def get_set(n_sum, num_boxes):
+def get_set(sum_val, n):
+  """
+  Returns the set of integers present in all the combinations of n integers
+  that sum to sum_val.
+
+  For a nice colorful table of these results, try:
+    http://www.kevinpluck.net/kakuro/KakuroCombinations.html
+
+  >>> get_set(10, 3)
+  set(1, 2, 3, 4, 5, 6, 7)
+
+  >>> get_set(7, 3)
+  set(1, 2, 4)
+  """ 
   def flatten(listOfLists):
     return list(chain.from_iterable(listOfLists))
-  return set(flatten(get_vals(n_sum, num_boxes)))
+  return set(flatten(get_vals(sum_val, n)))
 
-def first_run(constraints):
+def _first_run(constraints):
+  """
+  Assigns set of possible values to each cell based on analysis of constraint
+  value and number of cells.
+  """
   for c in constraints:
     sum_val = c[0]
     num_boxes = len(c) - 1
     for x in c[1:]:
       x.set &= get_set(sum_val, num_boxes)
 
-def remove_duplicates(cells):
+def _remove_duplicates(cells):
+  """Given a set of cells, if any cells have only 1 possibility, this
+  possibility will be removed from the other cells."""
   for cell1 in cells:
     if len(cell1.set) == 1:
       for cell2 in cells:
         if cell1 is not cell2:
           cell2.set -= cell1.set;
 
-def remove_invalid_sums(cells, sum_val):
+def _remove_invalid_sums(cells, sum_val):
+  """Adds up all combinations of the integers in the cells and checks which
+  ones sum to sum_val. Removes any integers for which it is impossible to sum
+  to sum_val using that integer in that cell.
+
+  Possibly a bit too clever (and slow) for its own good."""
   from itertools import product
 
   sets = (cell.set for cell in cells)
@@ -283,8 +330,9 @@ def remove_invalid_sums(cells, sum_val):
   for old, new in zip(cells, new_sets):
     old.set &= set(new)
 
-def iterate(constraints):
-  """The strategy is to run this repeatedly until it stops making progress"""
+def _iterate(constraints):
+  """The strategy is to run this repeatedly until it stops making progress.
+  Sloppy, but effective."""
   for c in constraints:
     sum_val, cells = c[0], c[1:]
     if IDENTICAL_EXCLUSION:
@@ -292,7 +340,6 @@ def iterate(constraints):
     _remove_invalid_sums(cells, sum_val)
 
 
-# http://www.kevinpluck.net/kakuro/KakuroCombinations.html
 # Sum=3, Boxes=2: 12
 # Sum=4, Boxes=2: 13
 # Sum=5, Boxes=2: 14, 23
