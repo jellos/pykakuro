@@ -70,6 +70,23 @@ import logging
 
 logging.basicConfig(level=logging.DEBUG)
 
+class Cell(object):
+  def __init__(self, start=None):
+    if start == None:
+      start = [1,2,3,4,5,6,7,8,9]
+    if type(start) == type(0):
+      start = [start]
+    self.set = set(start)
+
+  def __repr__(self):
+    if self.set == set([]):
+      return "Cell([])"
+    if len(self.set) == 1:
+      for x in self.set:
+        return "Cell(%d)" % x
+    return "Cell(%s)" % list(self.set)
+
+
 def data_to_grid(data, x_size):
   """Quick util func to draw prettier version of puzzle strings"""
   strings = []
@@ -89,15 +106,21 @@ def data_to_grid(data, x_size):
 
   return '\n'.join((row_strings))
 
+def is_solved(constraints):
+    return all(all(len(x.set) == 1 for x in c[1:]) for c in constraints)
+
 def solve(input, x_size):
   y_size = len(input) / x_size
+
+  #TODO: validate input
+  #raise MalformedBoardException("{0} not a valid token".format(cell))
 
   # To make the script more space and time efficient, each cell can be
   # represented as an integer and we can use bitwise operations to indicate
   # which integers are allowed in the slot.  Unfortunately this also makes the
   # code somewhat harder to read. Set operations are a natural fit for
   # readability since we are talking about possibilities for each cell.
-  a=[set() if x==1 else x for x in input]
+  a=[Cell() if x==1 else x for x in input]
   rows = [a[z:z+x_size] for z in range(0,len(a)-x_size+1,x_size)]
   cols = [a[z::x_size] for z in range(x_size)]
 
@@ -110,48 +133,46 @@ def solve(input, x_size):
   for col in cols:
     constraints.extend(process_row_or_col(col, DOWN))
 
+  first_run(constraints)
 
   for i in range(200):
     old = str(constraints)
-    if iterate(constraints): break
+    iterate(constraints)
+    if is_solved(constraints):
+      break
     if old == str(constraints):
       logging.debug("Begining speculative evaluation")
-      unsatisfied = [c for c in constraints if any(len(x) > 1 for x in c[1:])]
-      solutions = [[y for y in product(*x[1:]) if sum(y)==x[0]] for x in a]
+      #unsatisfied = [c for c in constraints if any(len(x) > 1 for x in c[1:])]
+      #solutions = [[y for y in product(*x[1:]) if sum(y)==x[0]] for x in a]
       break
 
-  return [x.pop() if type(x)==type(set()) else x for x in a]
+  return [x.set.copy().pop() if isinstance(x, Cell) else x for x in a]
 
 class MalformedBoardException(Exception): pass
 
-def process_row_or_col(row, row_or_col):
+def process_row_or_col(record, row_or_col):
   constraints = []
 
-  row.reverse()
-  while row:
-    cell = row.pop()
-    if cell == 0:
-      pass
-    elif cell == set():
-      pass
-    elif type(cell) == type(()):
-      if cell[row_or_col]:
-        constraint = [cell[row_or_col]]
-        cell = row.pop()
-        if cell != set():
+  record.reverse()
+  while record:
+    cell = record.pop()
+    if type(cell) == type(()):
+      sum_val = cell[row_or_col]
+      if sum_val != 0:
+        constraint = [sum_val]
+        cell = record.pop()
+        if not isinstance(cell, Cell):
           raise MalformedBoardException("Constraint without adjacent '1'")
         constraint.append(cell)
         try:
           while True:
-            cell = row.pop()
-            if cell != set():
-              row.append(cell)
+            cell = record.pop()
+            if not isinstance(cell, Cell):
+              record.append(cell) #unpop
               break
             constraint.append(cell)
         except IndexError: pass
         constraints.append(constraint)
-    else:
-      raise MalformedBoardException("{0} not a valid token".format(cell))
 
   return constraints
 
@@ -193,34 +214,29 @@ def get_set(n_sum, num_boxes):
     return list(chain.from_iterable(listOfLists))
   return set(flatten(get_vals(n_sum, num_boxes)))
 
-def update_constraint(c, sum, num):
-  if c:
-    c.intersection_update(get_set(sum, num))
-  else:
-    c.update(get_set(sum, num))
+def first_run(constraints):
+  for c in constraints:
+    sum_val = c[0]
+    num_boxes = len(c) - 1
+    for x in c[1:]:
+      x.set &= get_set(sum_val, num_boxes)
+      print sum_val, num_boxes, x.set
 
 def iterate(constraints):
   """This is the solver's main loop."""
-  solved = True
+  print constraints
 
   from itertools import product
 
   for c in constraints:
     sum_val = c[0]
-    for x in range(1,len(c)):
-      update_constraint(c[x], sum_val, len(c) - 1)
-
-  for c in constraints:
-    sum_val = c[0]
-    for x in range(1,len(c)):
-      c[x].intersection_update([y[x-1] for y in product(*c[1:]) if sum(y)==sum_val])
-      if len(c[x]) == 1:
-        for y in range(1,len(c)):
-          if x != y:
-            c[y]-=c[x]
-      else:
-        solved = False
-  return solved
+    print sum_val
+    cells = c[1:]
+    sets = (cell.set for cell in cells)
+    new_sets = zip(*[seq for seq in product(*sets) if sum(seq)==sum_val])
+    for old, new in zip(cells, new_sets):
+      print old.set, "->", new
+      old.set &= set(new)
 
 
 
