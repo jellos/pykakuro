@@ -193,6 +193,31 @@ def _generate_constraints(input, x_size, is_entry_square):
 
   return constraints
 
+def generate_random(x_size, y_size, seed=None)
+  def row(a, n):
+    return a[x_size*n:(x_size+1)*n]
+
+  def col(a, n):
+    return[n:len(a):x_size]
+
+  import random
+  random.seed(seed)
+
+  #s = random.sample(range(1,10),9)
+
+  a=[0]*x_size*y_size
+  for i in range(x_size*y_size):
+    if random.random() > 0.6:
+      j = None
+      while True:
+        j = random.randint(1,9)
+        if (j not in row(a, i/y_size) and
+            j not in col(a, i%x_size)):
+          break
+      a[i] = j
+
+  pass
+
 def solve(input, x_size):
   _verify_input_integrity(input, x_size)
 
