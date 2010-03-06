@@ -86,6 +86,8 @@ IDENTICAL_EXCLUSION = True
 
 import logging
 
+import itertools
+
 logging.basicConfig(level=logging.DEBUG)
 
 class Cell(object):
@@ -167,6 +169,12 @@ def verify_solution(input, x_size):
     print "Invalid Solution"
     return False
 
+def rows_from_list(list, x_size):
+  return [list[z:z+x_size] for z in range(0,len(list)-x_size+1,x_size)]
+
+def cols_from_list(list, x_size):
+  return [list[z::x_size] for z in range(x_size)]
+
 def _generate_constraints(input, x_size, is_entry_square):
   """
   Creates a list of constraints based on given input. If the input contains
@@ -178,8 +186,8 @@ def _generate_constraints(input, x_size, is_entry_square):
   allows this function to be agnostic of whether objects or simple numbers are
   used in the list.)
   """
-  rows = [input[z:z+x_size] for z in range(0,len(input)-x_size+1,x_size)]
-  cols = [input[z::x_size] for z in range(x_size)]
+  rows = rows_from_list(input, x_size)
+  cols = cols_from_list(input, x_size)
 
   constraints = []
   ACROSS = 0
@@ -193,13 +201,13 @@ def _generate_constraints(input, x_size, is_entry_square):
 
   return constraints
 
-def generate_random(x_size, y_size, seed=None)
-  def row(a, n):
-    return a[x_size*n:(x_size+1)*n]
+def row(a, n):
+  return a[x_size*n:(x_size+1)*n]
 
-  def col(a, n):
-    return[n:len(a):x_size]
+def col(a, n):
+  return a[n:len(a):x_size]
 
+def generate_random(x_size, y_size, seed=None):
   import random
   random.seed(seed)
 
@@ -209,14 +217,44 @@ def generate_random(x_size, y_size, seed=None)
   for i in range(x_size*y_size):
     if random.random() > 0.6:
       j = None
-      while True:
+      for x in range(20):
         j = random.randint(1,9)
+        # TODO: ok for small boards, but not for big
         if (j not in row(a, i/y_size) and
             j not in col(a, i%x_size)):
+          a[i] = j
           break
-      a[i] = j
 
-  pass
+  # 0-out top and left
+  a[0:x_size] = (0,)*x_size
+  a[0::x_size] = (0,)*y_size
+
+  # add tuples and right rules
+  sum = 0
+  for y in range(0, y_size):
+    for i in range(x_size + y*x_size-1, y*x_size-1, -1):
+      if a[i]:
+        sum += a[i]
+      elif sum:
+        a[i] = (sum, 0)
+        sum = 0
+
+  # add tuples and down rules, modify existing tuples if necessary
+  sum = 0
+  for x in range(0, x_size):
+    for i in range(len(a) - x_size + x, -1, -x_size):
+      if a[i] and type(a[i]) != type(()):
+        sum += a[i]
+      elif sum:
+        if type(a[i]) == type(()):
+          a[i] = (a[i][0], sum)
+        else:
+          a[i] = (0, sum)
+        sum = 0
+
+
+  return a
+
 
 def solve(input, x_size):
   _verify_input_integrity(input, x_size)
