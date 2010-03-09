@@ -97,6 +97,7 @@ class Cell(object):
     if type(start) == type(0):
       start = [start]
     self.set = set(start)
+    self.test = 0
 
   def __repr__(self):
     if self.set == set([]):
@@ -105,6 +106,84 @@ class Cell(object):
       for x in self.set:
         return "Cell(%d)" % x
     return "Cell(%s)" % list(self.set)
+
+class Kakuro(object):
+  def __str__(self):
+    return data_to_grid(self.data, self.x_size)
+
+  def __repr__(self):
+    return '<%s.%s object (%dx%d) at %s>' % (
+            self.__class__.__module__,
+            self.__class__.__name__,
+            self.x_size,
+            len(self.data)/self.x_size,
+            hex(id(self)),
+        )
+  def __init__(self, data, x_size):
+    self.data = data
+    self.x_size = x_size
+
+  def solve(self):
+    input = self.data
+    x_size = self.x_size
+    _verify_input_integrity(input, x_size)
+
+    #TODO: validate input
+    #raise MalformedBoardException("{0} not a valid token".format(cell))
+
+    # To make the script more space and time efficient, each cell can be
+    # represented as an integer and we can use bitwise operations to indicate
+    # which integers are allowed in the slot.  Unfortunately this also makes the
+    # code somewhat harder to read. Set operations are a natural fit for
+    # readability since we are talking about possibilities for each cell.
+    a=[Cell() if x==1 else x for x in input]
+
+    def is_entry_square(cell):
+      return isinstance(cell, Cell)
+
+    constraints = _generate_constraints(a, x_size, is_entry_square)
+
+    _first_run(constraints)
+
+    for i in range(200):
+      old = str(constraints)
+      _iterate(constraints)
+      if _is_solved(constraints):
+        return [x.set.copy().pop() if isinstance(x, Cell)  else x for x in a]
+      if old == str(constraints):
+        logging.debug("Begining speculative evaluation")
+        unsatisfied = [c for c in constraints if any(len(x.set) > 1 for x in c[1:])]
+        space = 1
+        for c in unsatisfied:
+          for x in c[1:]:
+            if len(x.set) > 0:
+              space *= len(x.set)
+        logging.debug("Search size: %d" % space)
+
+        cells = []
+
+        # set .tests
+        for c in constraints:
+          for x in c[1:]:
+            if len(x.set) == 1:
+              x.test = x.set.pop()
+
+
+        for c in unsatisfied:
+          for x in c[1:]:
+            if len(x.set) > 1:
+              cells.append(x)
+
+        try:
+          _recursive_cell_test(constraints, cells, 0)
+        except Success:
+          return [x.test if isinstance(x, Cell)  else x for x in a]
+
+  def unsolve(self):
+    d = self.data
+    for i in range(len(d)):
+      if d[i] and type(d[i]) != type(()):
+        d[i] = 1
 
 def _verify_input_integrity(data, x_size):
   if len(data) % x_size != 0:
@@ -201,13 +280,14 @@ def _generate_constraints(input, x_size, is_entry_square):
 
   return constraints
 
-def row(a, n):
+
+def row(a, x_size, n):
   return a[x_size*n:(x_size+1)*n]
 
-def col(a, n):
+def col(a, x_size, n):
   return a[n:len(a):x_size]
 
-def generate_random(x_size, y_size, seed=None):
+def new_puzzle(x_size, y_size, seed=None):
   import random
   random.seed(seed)
 
@@ -220,8 +300,8 @@ def generate_random(x_size, y_size, seed=None):
       for x in range(20):
         j = random.randint(1,9)
         # TODO: ok for small boards, but not for big
-        if (j not in row(a, i/y_size) and
-            j not in col(a, i%x_size)):
+        if (j not in row(a, x_size, i/y_size) and
+            j not in col(a, x_size, i%x_size)):
           a[i] = j
           break
 
@@ -253,55 +333,9 @@ def generate_random(x_size, y_size, seed=None):
         sum = 0
 
 
-  return a
+  return Kakuro(data=a, x_size=x_size)
 
 
-def solve(input, x_size):
-  _verify_input_integrity(input, x_size)
-
-  #TODO: validate input
-  #raise MalformedBoardException("{0} not a valid token".format(cell))
-
-  # To make the script more space and time efficient, each cell can be
-  # represented as an integer and we can use bitwise operations to indicate
-  # which integers are allowed in the slot.  Unfortunately this also makes the
-  # code somewhat harder to read. Set operations are a natural fit for
-  # readability since we are talking about possibilities for each cell.
-  a=[Cell() if x==1 else x for x in input]
-
-  def is_entry_square(cell):
-    return isinstance(cell, Cell)
-
-  constraints = _generate_constraints(a, x_size, is_entry_square)
-
-  _first_run(constraints)
-
-  for i in range(200):
-    old = str(constraints)
-    _iterate(constraints)
-    if _is_solved(constraints):
-      return [x.set.copy().pop() if isinstance(x, Cell)  else x for x in a]
-    if old == str(constraints):
-      logging.debug("Begining speculative evaluation")
-      unsatisfied = [c for c in constraints if any(len(x.set) > 1 for x in c[1:])]
-      cells = []
-
-      # set .tests
-      for c in constraints:
-        for x in c[1:]:
-          if len(x.set) == 1:
-            x.test = x.set.pop()
-
-
-      for c in unsatisfied:
-        for x in c[1:]:
-          if len(x.set) > 1:
-            cells.append(x)
-
-      try:
-        _recursive_cell_test(constraints, cells, 0)
-      except Success:
-        return [x.test if isinstance(x, Cell)  else x for x in a]
 
 
 def _are_constraints_satisfied(constraints):
