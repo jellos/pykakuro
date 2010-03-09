@@ -124,6 +124,8 @@ class Kakuro(object):
     self.x_size = x_size
 
   def solve(self):
+    import copy
+
     input = self.data
     x_size = self.x_size
     _verify_input_integrity(input, x_size)
@@ -136,23 +138,31 @@ class Kakuro(object):
     # which integers are allowed in the slot.  Unfortunately this also makes the
     # code somewhat harder to read. Set operations are a natural fit for
     # readability since we are talking about possibilities for each cell.
-    a=[Cell() if x==1 else x for x in input]
+    self._cellwise = a =[Cell() if x==1 else x for x in input]
 
     def is_entry_square(cell):
       return isinstance(cell, Cell)
 
-    constraints = _generate_constraints(a, x_size, is_entry_square)
+    constraints = self._constraints = _generate_constraints(a, x_size, is_entry_square)
 
     _first_run(constraints)
+    self._initial_constraints = copy.deepcopy(constraints)
 
     for i in range(200):
       old = str(constraints)
       _iterate(constraints)
       if _is_solved(constraints):
-        return [x.set.copy().pop() if isinstance(x, Cell)  else x for x in a]
+        data = [x.set.copy().pop() if isinstance(x, Cell)  else x for x in a]
+        self.data = data
+        return
       if old == str(constraints):
+        for c in constraints:
+          for x in c[1:]:
+            if len(x.set) == 0:
+              raise Exception("Failure in heuristic stage: unable to solve")
+
         logging.debug("Begining speculative evaluation")
-        unsatisfied = [c for c in constraints if any(len(x.set) > 1 for x in c[1:])]
+        unsatisfied = self._unsatisfied = [c for c in constraints if any(len(x.set) > 1 for x in c[1:])]
         space = 1
         for c in unsatisfied:
           for x in c[1:]:
@@ -177,7 +187,11 @@ class Kakuro(object):
         try:
           _recursive_cell_test(constraints, cells, 0)
         except Success:
-          return [x.test if isinstance(x, Cell)  else x for x in a]
+          data = [x.test if isinstance(x, Cell)  else x for x in a]
+          self.data = data
+        else:
+          raise Exception("Unable to solve")
+
 
   def unsolve(self):
     d = self.data
@@ -426,6 +440,8 @@ def get_set(sum_val, n):
   >>> get_set(7, 3)
   set(1, 2, 4)
   """ 
+  if n == 1: return set((sum_val,))
+
   def flatten(listOfLists):
     return list(chain.from_iterable(listOfLists))
   return set(flatten(get_vals(sum_val, n)))
