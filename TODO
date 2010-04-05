@@ -1,3 +1,6 @@
-svg output would be kinda cool. like http://en.wikipedia.org/wiki/Kakuro
-add verify_solution func that verifies a solution string
-to generate, just create the numbers in a grid and then generate the constraints from the numbers
+Short term:
+- Needs a 'verify_puzzle' that just checks whether a puzzle is valid (ie constraints OK, no duplicate numbers, etc)
+- add verify_solution func that verifies a solution string
+
+Longer term:
+- svg output would be kinda cool. like http://en.wikipedia.org/wiki/Kakuro

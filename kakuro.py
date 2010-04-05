@@ -16,61 +16,14 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
+#
 ##############################################################################
-
-# Kakuro boards don't really lend themselves to being drawn in ASCII, but we'll
-# give it a shot. Here's a board the way you might see it drawn in a puzzle
-# book:
 #
-#      |\ |\
-#      |7\|6\
-#   |\4|  |  |
-#   |4\|--+--+
-# \7|  |  |  |
-#  \|--|--+--+
-# \6|  |  |  |
-#  \|--+--+--+
+# If you want to use pykakuro with a free software project that is not
+# compatible with the GPL, please contact me and I can probably grant you an
+# exception.
 #
-# To represent the board, we use a 0 for the cells that don't take a number and
-# a 1 for the cells that do. Constraint squares are a tuple of two integers,
-# with the first being the constraint ACROSS and the second being the
-# constraint DOWN. If no constraint is specified for a particular direction,
-# the integer should be 0. Here is the puzzle shown above in this format:
-#
-#  0 | 0 |0,7|0,6|
-# ---+---+---+---+
-#  0 |4,4| 1 | 1 |
-# ---+---+---+---+
-# 7,0| 1 | 1 | 1 |
-# ---+---+---+---+
-# 6,0| 1 | 1 | 1 |
-# ---+---+---+---+
-#
-# And here is the same puzzle encoded in the canonical format used by this
-# program:
-#
-# sample_puzzle = (0 ,   0 ,(0,7),(0,6),
-#                  0 ,(4,4),   1 ,   1 ,
-#               (7,0),   1 ,   1 ,   1 ,
-#               (6,0),   1 ,   1 ,   1 ,
-#                 )
-#
-# When we call solve, we get back an output string:
-# >>> kakuro.solve(sample_puzzle, 4)
-# [0, 0, (0, 7), (0, 6), 0, (4, 4), 1, 3, (7, 0), 1, 4, 2, (6, 0), 3, 2, 1]
-#
-# In the grid form, that looks like this:
-# >>> print kakuro.data_to_grid(result,4)
-#
-#  0 | 0 |0,7|0,6|
-# ---+---+---+---+
-#  0 |4,4| 1 | 3 |
-# ---+---+---+---+
-# 7,0| 1 | 4 | 2 |
-# ---+---+---+---+
-# 6,0| 3 | 2 | 1 |
-# ---+---+---+---+
+##############################################################################
 #
 # Various options affect the solving routines:
 #
@@ -91,6 +44,11 @@ import itertools
 logging.basicConfig(level=logging.DEBUG)
 
 class Cell(object):
+  """Represents a single cell inside a Kakuro puzzle.
+
+  Generally we only use these when we want to repesent a cell with an unknown
+  state during the solving process. After the puzzle has been completely solved
+  we only care about the value of the cell."""
   def __init__(self, start=None):
     if start == None:
       start = [1,2,3,4,5,6,7,8,9]
@@ -100,16 +58,16 @@ class Cell(object):
     self.test = 0
 
   def __repr__(self):
-    if self.set == set([]):
-      return "Cell([])"
     if len(self.set) == 1:
       for x in self.set:
         return "Cell(%d)" % x
+
     return "Cell(%s)" % list(self.set)
 
 class Kakuro(object):
+  """Represents a Kakuro puzzle."""
   def __str__(self):
-    return data_to_grid(self.data, self.x_size)
+    return pretty_print(self.data, self.x_size)
 
   def __repr__(self):
     return '<%s.%s object (%dx%d) at %s>' % (
@@ -124,6 +82,8 @@ class Kakuro(object):
     self.x_size = x_size
 
   def solve(self):
+    """Attempts to solve this puzzle. Will abort if it looks impractical to
+    solve in a few seconds."""
     import copy
 
     input = self.data
@@ -138,7 +98,7 @@ class Kakuro(object):
     # which integers are allowed in the slot.  Unfortunately this also makes the
     # code somewhat harder to read. Set operations are a natural fit for
     # readability since we are talking about possibilities for each cell.
-    self._cellwise = a =[Cell() if x==1 else x for x in input]
+    self._cellwise = a = [Cell() if x==1 else x for x in input]
 
     def is_entry_square(cell):
       return isinstance(cell, Cell)
@@ -152,6 +112,7 @@ class Kakuro(object):
       old = str(constraints)
       _iterate(constraints)
       if _is_solved(constraints):
+        logging.debug("Solved in constraint eval phase after %d passes" % i)
         data = [x.set.copy().pop() if isinstance(x, Cell)  else x for x in a]
         self.data = data
         return
@@ -159,7 +120,9 @@ class Kakuro(object):
         for c in constraints:
           for x in c[1:]:
             if len(x.set) == 0:
-              raise Exception("Failure in heuristic stage: unable to solve")
+              raise Exception("Failure in constraint eval stage: unable to solve")
+            else:
+              print len(x.set)
 
         logging.debug("Begining speculative evaluation")
         unsatisfied = self._unsatisfied = [c for c in constraints if any(len(x.set) > 1 for x in c[1:])]
@@ -169,6 +132,9 @@ class Kakuro(object):
             if len(x.set) > 0:
               space *= len(x.set)
         logging.debug("Search size: %d" % space)
+
+        if space > 100000:
+          raise Exception("This puzzle is too complex to solve.")
 
         cells = []
 
@@ -194,10 +160,17 @@ class Kakuro(object):
 
 
   def unsolve(self):
+    """Removes the solution data from this puzzle leaving the constraints
+    intact. """
     d = self.data
     for i in range(len(d)):
       if d[i] and type(d[i]) != type(()):
         d[i] = 1
+
+  @property
+  def is_solved(self):
+    """True if this puzzle is solved correctly, False if it is not."""
+    return verify_solution(self.data, self.x_size)
 
 def _verify_input_integrity(data, x_size):
   if len(data) % x_size != 0:
@@ -209,8 +182,8 @@ def _verify_input_integrity(data, x_size):
                                     "the input.")
 
 
-def data_to_grid(data, x_size):
-  """Quick util func to draw prettier version of puzzle strings"""
+def pretty_print(data, x_size):
+  """Draws a prettier version of puzzle strings"""
   _verify_input_integrity(data, x_size)
 
   strings = []
@@ -252,15 +225,7 @@ def verify_solution(input, x_size):
 
   constraints = _generate_constraints(input, x_size, is_entry_square)
 
-  print constraints
-
-  s=all(x[0] == sum(y for y in x[1:]) for x in constraints)
-  if s:
-    print "Valid Solution"
-    return True
-  else:
-    print "Invalid Solution"
-    return False
+  return all(x[0] == sum(y for y in x[1:]) for x in constraints)
 
 def rows_from_list(list, x_size):
   return [list[z:z+x_size] for z in range(0,len(list)-x_size+1,x_size)]
@@ -301,7 +266,12 @@ def row(a, x_size, n):
 def col(a, x_size, n):
   return a[n:len(a):x_size]
 
-def new_puzzle(x_size, y_size, seed=None):
+def new_puzzle(x_size, y_size, difficulty=3, seed=None):
+  """Generates a new (solved) Kakuro of the specified size. ``Difficulty`` is
+  an integer from 1 to 9 that affects various parameters in the generation; 1
+  is very easy and 9 is the hardest. If a ``seed`` is provided, the puzzle will
+  be the same every time."""
+
   import random
   random.seed(seed)
 
@@ -369,7 +339,10 @@ def _process_row_or_col(record, row_or_col, is_entry_square):
         constraint = [sum_val]
         cell = record.pop()
         if not is_entry_square(cell):
-          raise MalformedBoardException("Constraint without adjacent '1'")
+          print cell
+          print type(cell)
+          msg = "Found constraint '%d' without adjacent entry cell." % constraint[0]
+          raise MalformedBoardException(msg)
         constraint.append(cell)
         try:
           while True:
@@ -400,7 +373,7 @@ def get_vals(sum_val, n):
   return [x for x in combinations(range(1, sum_val),n) if
           sum(x) == sum_val and all(y<10 for y in x)]
 
-class memoized(object):
+class _memoized(object):
   """Decorator that caches a function's return value each time it is called.
   If called later with the same arguments, the cached value is returned, and
   not re-evaluated.
@@ -425,7 +398,7 @@ class memoized(object):
     return self.func.__doc__
 
 
-@memoized
+@_memoized
 def get_set(sum_val, n):
   """
   Returns the set of integers present in all the combinations of n integers
@@ -488,12 +461,6 @@ def _iterate(constraints):
       _remove_duplicates(cells)
     _remove_invalid_sums(cells, sum_val)
 
-
-# Sum=3, Boxes=2: 12
-# Sum=4, Boxes=2: 13
-# Sum=5, Boxes=2: 14, 23
-# Sum=5, Boxes=2: 15, 24
-# Sum=5, Boxes=3: 123
-
-
-# To solve the puzzle, we call solve(sample_puzzle, constraints=False)
+# Staging area for ipython code. Automatically runs when %run is used
+#a=new_puzzle(25,25,5)
+#a.unsolve()
