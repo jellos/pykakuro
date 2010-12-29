@@ -92,58 +92,46 @@ class Cell(object):
     return "Cell(%s)" % list(self.set)
 
 class Kakuro(object):
-  """Represents a Kakuro puzzle. Puzzles can be either solved or unsolved."""
+  """Creates a new Kakuro puzzle.
+
+  Parameters (max_val, is_exclusive, etc) should not change after a puzzle is
+  created."""
   def __str__(self):
-    return pretty_print(self._data, self._x_size)
+    return pretty_print(self.data, self.x_size)
 
   def __repr__(self):
     return '<%dx%d Kakuro puzzle, %s, at %s>' % (
-            self._x_size,
-            len(self._data)/self._x_size,
+            self.x_size,
+            len(self.data)/self.x_size,
             "solved" if self._is_solved else "unsolved",
             hex(id(self)),
         )
   def __init__(self, x_size, data, min_val=1, max_val=9, is_exclusive=True):
-    """Creates a new Kakuro puzzle. Parameters (max_val, is_exclusive, etc)
-    should not change after a puzzle is created."""
-
-    self._data = data
-    """Internal data representation."""
+    self.data = data
 
     if x_size < 1:
       raise ValueError("x_size must be greater than 0.")
 
-    self._x_size = x_size
-    """Width of puzzle. (We assume all puzzles are square)"""
+    self.x_size = x_size
 
     if max_val < min_val:
       raise ValueError("max_val must be greater than or equal to min_val.")
 
     self.min_val = min_val
-    """Minimum value allowed in solutions (normally 1)"""
 
     self.max_val = max_val
-    """Maximum value allowed in solutions (normally 9)"""
 
     self.is_exclusive = is_exclusive
-    """True if numbers following clues must be exclusive, False if they can be
-    repeated. (ie "2,2,2" would be allowed for the clue 6 if this was
-    False)"""
 
     self._is_solved = False
-    """True if the puzzle has been solved by the tool (for example by calling
-    .solve() on it), False if it has not been solved."""
 
     self.num_entry_squares = (
-      sum(1 for c in self._data if type(c) == type(0) and c > 0)
+      sum(1 for c in self.data if type(c) == type(0) and c > 0)
     )
     """Total number of entry squares in this puzzle."""
 
     val_size = self.max_val - self.min_val + 1
     self.search_space_size = val_size**self.num_entry_squares
-    """Total number of possible puzzle states. This is equal to
-    :math:`(max_val-min_val)^{num_entry_squares}`. Except for small puzzles,
-    this will be very large."""
 
   def solve(self, timeout=None, timeout_exception=True):
     """Attempts to solve this puzzle.
@@ -186,8 +174,8 @@ class Kakuro(object):
     if self._is_solved:
       raise Exception("Already solved")
 
-    input = self._data
-    x_size = self._x_size
+    input = self.data
+    x_size = self.x_size
 
     # To make the script more space efficient, each cell can be represented as
     # an integer and we can use bitwise operations to indicate which integers
@@ -214,7 +202,7 @@ class Kakuro(object):
       if _is_solved(constraints):
         logging.debug("Solved in constraint eval phase after %d passes" % i)
         data = [x.set.copy().pop() if isinstance(x, Cell)  else x for x in a]
-        self._data = data
+        self.data = data
         return
 
       if old == str(constraints):
@@ -259,7 +247,7 @@ class Kakuro(object):
         except Success:
           data = [x.test if isinstance(x, Cell)  else x for x in a]
           logging.debug("Solved in speculative eval phase after %d passes" % i)
-          self._data = data
+          self.data = data
           return
         else:
           raise Exception("Unable to solve")
@@ -269,7 +257,7 @@ class Kakuro(object):
     intact."""
     self._is_solved = False
 
-    d = self._data
+    d = self.data
     for i in range(len(d)):
       if d[i] and type(d[i]) != type(()):
         d[i] = 1
@@ -290,7 +278,7 @@ class Kakuro(object):
     def fail_debug():
       logging.debug("failed puzzle data:\n" + str(self))
 
-    constraints = _generate_constraints(self._data, self._x_size, is_entry_square)
+    constraints = _generate_constraints(self.data, self.x_size, is_entry_square)
 
     # TODO: better error reporting for all of these
     if not all(x[0] == sum(y for y in x[1:]) for x in constraints):
@@ -311,10 +299,10 @@ class Kakuro(object):
 
   def check_puzzle(self):
     """Raises an exception if puzzle is not valid."""
-    if len(self._data) % self._x_size != 0:
+    if len(self.data) % self.x_size != 0:
       raise InvalidPuzzleDataLengthException("The input data must be square in shape.")
 
-    for x in self._data:
+    for x in self.data:
       if (type(x) != type(0)) and (type(x) != type(())):
         raise InvalidPuzzleDataException("Only tuples and integers are allowed in "
                                          "the input.")
@@ -324,7 +312,7 @@ class Kakuro(object):
 
     # TODO: for some reason this function modifies the first arg passed; fix
     # it so it doesn't and then the deepcopy can be removed.
-    constraints = _generate_constraints(copy.deepcopy(self._data), self.x_size, is_entry_square)
+    constraints = _generate_constraints(copy.deepcopy(self.data), self.x_size, is_entry_square)
 
     if any(len(c) < 2 for c in constraints):
       raise ConstraintWithoutEntryCellException("Constraint without entry square.")
@@ -546,7 +534,6 @@ class _memoized(object):
   def __repr__(self):
     """Return the function's docstring."""
     return self.func.__doc__
-
 
 @_memoized
 def get_set(sum_val, n):

@@ -122,18 +122,77 @@ same things.::
   ---+---+---+---+
 
 
-Module Reference
-==================
+Reference
+=========
 
-.. automodule:: kakuro
-   :members:
-   :undoc-members:
+.. autoclass:: Kakuro
 
-Contents:
+   .. automethod:: solve
+   .. automethod:: check_puzzle
+   .. automethod:: check_solution
+   .. automethod:: unsolve
+
+   .. attribute:: data
+
+      Puzzle data.
+
+      TODO: should be a descriptor so data changes can be detected
+
+   .. note::
+
+      The following properties are generally considered read-only and should
+      not be changed after a puzzle is created unless you know what you're
+      doing. No warnings are raised if they are modified, but the program's
+      behavior may become undefined. If in doubt, create a new Kakuro object.
+
+   .. attribute:: x_size
+
+      Width of puzzle. (We assume all puzzles are square)
+
+   .. attribute:: min_val
+
+      Minimum value allowed in solutions (normally 1)
+
+   .. attribute:: max_val
+
+      Maximum value allowed in solutions (normally 9)
+
+   .. attribute:: is_exclusive
+
+      True if numbers following clues must be exclusive, False if they can be
+      repeated. (ie "2,2,2" would be allowed for the clue 6 if this was False)
+
+   .. attribute:: is_solved
+
+      True if the puzzle is considered solved by the tool (by creating a random
+      solved puzzle or by calling .solve() on any puzzle), False if it is
+      considered unsolved.
+
+   .. attribute:: num_entry_squares
+
+      Total number of entry squares in this puzzle.
+
+   .. attribute:: search_space_size
+
+      Total number of possible puzzle states. This is equal to
+      :math:`(\text{max\_val}-\text{min\_val} +
+      1)^{\text{num\_entry\_squares}}`.
+      Except for small puzzles this number will be very large making
+      brute-force searches of the entire space intractable.
+
+   .. attribute:: brute_force_size
+
+      Number of puzzle states that must be explored using the brute force
+      algorithm in order to solve the puzzle.
+
+      Note that the puzzle must have been previously solved with .solve() in
+      order for this value to have been calculated. Otherwise, attempting to
+      access it will raise an AttributeError.
+
+      TODO: could make this a property and lazily calculate this value
 
 .. toctree::
    :maxdepth: 2
-
 
 Indices and tables
 ==================
