@@ -19,29 +19,56 @@
 #
 ##############################################################################
 #
-# If you want to use pykakuro with a free software project that is not
-# compatible with the GPL, please contact me and I can probably grant you an
-# exception.
-#
-##############################################################################
-#
 # Various options affect the solving routines:
-#
-# Setting this to true enforces an additonal constraint that only the integers
-# 1 through 9 can be placed in each box.
-ONE_TO_NINE_EXCLUSIVE = True
 
-# Setting this to true enforces that constraint blocks cannot have identical
-# numbers in them.
-IDENTICAL_EXCLUSION = True
+BRUTE_FORCE_WARN_LIMIT = 10**11
 
 #############################################################################
 
 import logging
+import copy
+import random
+import threading
+import thread
 
 import itertools
 
-logging.basicConfig(level=logging.DEBUG)
+#logging.basicConfig(level=logging.DEBUG)
+
+class MalformedPuzzleException(Exception):
+  """The puzzle was not a valid Kakuro puzzle."""
+
+class ConstraintWithoutEntryCellException(MalformedPuzzleException):
+  """If there's a constraint in a particular direction, there must be at least
+  one entry cell immediately following the constraint in that direction."""
+
+class InvalidPuzzleDataException(MalformedPuzzleException):
+  """Found an unexpected object in the puzzle data. Puzzle data should be a
+  list consisting of either integers or tuples of two integers."""
+
+class InvalidPuzzleDataLengthException(MalformedPuzzleException):
+  """Kakuro puzzles must be square, but the puzzle was not square."""
+
+class SolutionInvalidException(Exception):
+  """Raised by check_solution() if the solution is invalid."""
+
+class SolutionInvalidSumException(SolutionInvalidException):
+  """Raised by check_solution() if a sum is invalid."""
+
+class SolutionUnsolvedException(SolutionInvalidException):
+  """Raised by check_solution() if no attempt was made to solve the puzzle."""
+
+class SolutionNonUniqueException(SolutionInvalidException):
+  """Raised by check_solution() if a row/col has the correct sum but the
+  numbers are not unique and the puzzle was specified as an exclusive
+  puzzle."""
+
+class SolutionRangeException(SolutionInvalidException):
+  """Raised by check_solution() if a solution value was outside the range
+  allowed by the puzzle (the default range is 1 to 9)."""
+
+class SearchTimeExceeded(Exception):
+  """Raised by the solver if the puzzle is taking too long to solve."""
 
 class Cell(object):
   """Represents a single cell inside a Kakuro puzzle.
@@ -65,76 +92,153 @@ class Cell(object):
     return "Cell(%s)" % list(self.set)
 
 class Kakuro(object):
-  """Represents a Kakuro puzzle."""
+  """Represents a Kakuro puzzle. Puzzles can be either solved or unsolved."""
   def __str__(self):
-    return pretty_print(self.data, self.x_size)
+    return pretty_print(self._data, self._x_size)
 
   def __repr__(self):
-    return '<%s.%s object (%dx%d) at %s>' % (
-            self.__class__.__module__,
-            self.__class__.__name__,
-            self.x_size,
-            len(self.data)/self.x_size,
+    return '<%dx%d Kakuro puzzle, %s, at %s>' % (
+            self._x_size,
+            len(self._data)/self._x_size,
+            "solved" if self._is_solved else "unsolved",
             hex(id(self)),
         )
-  def __init__(self, data, x_size):
-    self.data = data
-    self.x_size = x_size
+  def __init__(self, x_size, data, min_val=1, max_val=9, is_exclusive=True):
+    """Creates a new Kakuro puzzle. Parameters (max_val, is_exclusive, etc)
+    should not change after a puzzle is created."""
 
-  def solve(self):
-    """Attempts to solve this puzzle. Will abort if it looks impractical to
-    solve in a few seconds."""
-    import copy
+    self._data = data
+    """Internal data representation."""
 
-    input = self.data
-    x_size = self.x_size
-    _verify_input_integrity(input, x_size)
+    if x_size < 1:
+      raise ValueError("x_size must be greater than 0.")
 
-    #TODO: validate input
-    #raise MalformedBoardException("{0} not a valid token".format(cell))
+    self._x_size = x_size
+    """Width of puzzle. (We assume all puzzles are square)"""
 
-    # To make the script more space and time efficient, each cell can be
-    # represented as an integer and we can use bitwise operations to indicate
-    # which integers are allowed in the slot.  Unfortunately this also makes the
-    # code somewhat harder to read. Set operations are a natural fit for
+    if max_val < min_val:
+      raise ValueError("max_val must be greater than or equal to min_val.")
+
+    self.min_val = min_val
+    """Minimum value allowed in solutions (normally 1)"""
+
+    self.max_val = max_val
+    """Maximum value allowed in solutions (normally 9)"""
+
+    self.is_exclusive = is_exclusive
+    """True if numbers following clues must be exclusive, False if they can be
+    repeated. (ie "2,2,2" would be allowed for the clue 6 if this was
+    False)"""
+
+    self._is_solved = False
+    """True if the puzzle has been solved by the tool (for example by calling
+    .solve() on it), False if it has not been solved."""
+
+    self.num_entry_squares = (
+      sum(1 for c in self._data if type(c) == type(0) and c > 0)
+    )
+    """Total number of entry squares in this puzzle."""
+
+    val_size = self.max_val - self.min_val + 1
+    self.search_space_size = val_size**self.num_entry_squares
+    """Total number of possible puzzle states. This is equal to
+    :math:`(max_val-min_val)^{num_entry_squares}`. Except for small puzzles,
+    this will be very large."""
+
+  def solve(self, timeout=None, timeout_exception=True):
+    """Attempts to solve this puzzle.
+
+    If a timeout (number of seconds) is provided, will raise an exception if
+    the puzzle is not yet solved after that amount of time. If
+    timeout_exception is set to False, will return False instead of raising an
+    exception.
+
+    If a timeout occurs, the puzzle will be the same as it was before solving.
+    TODO: Make this true!
+    """
+    if timeout:
+      def interrupt():
+        if not t.done:
+          thread.interrupt_main()
+      t = threading.Timer(timeout, interrupt)
+      t.daemon = True
+      t.done = False
+      t.start()
+
+    try:
+      self._solve(bool(timeout))
+      self._is_solved = True
+      if timeout:
+        t.done = True
+      return True
+    except KeyboardInterrupt:
+      # Usually we would prefer to raise an exception, but for the
+      # multiprocessing module we need to always return a value or the chain
+      # will get stuck.
+      if timeout_exception:
+        raise SearchTimeExceeded()
+      else:
+        return False
+
+  def _solve(self, has_timeout):
+    # TODO: not solving is_exclusive=False puzzles correctly
+
+    if self._is_solved:
+      raise Exception("Already solved")
+
+    input = self._data
+    x_size = self._x_size
+
+    # To make the script more space efficient, each cell can be represented as
+    # an integer and we can use bitwise operations to indicate which integers
+    # are allowed in the slot.  Unfortunately this also makes the code
+    # somewhat harder to read. Set operations are a natural fit for
     # readability since we are talking about possibilities for each cell.
+    #
+    # The faster method is used in the C speedups.
     self._cellwise = a = [Cell() if x==1 else x for x in input]
 
     def is_entry_square(cell):
       return isinstance(cell, Cell)
 
-    constraints = self._constraints = _generate_constraints(a, x_size, is_entry_square)
+    constraints = _generate_constraints(a, x_size, is_entry_square)
+    self._constraints = constraints
 
     _first_run(constraints)
     self._initial_constraints = copy.deepcopy(constraints)
 
     for i in range(200):
       old = str(constraints)
-      _iterate(constraints)
+      _iterate(constraints, self.is_exclusive)
+
       if _is_solved(constraints):
         logging.debug("Solved in constraint eval phase after %d passes" % i)
         data = [x.set.copy().pop() if isinstance(x, Cell)  else x for x in a]
-        self.data = data
+        self._data = data
         return
+
       if old == str(constraints):
+        # Was unable to improve constraints any further; must brute force now.
         for c in constraints:
           for x in c[1:]:
             if len(x.set) == 0:
-              raise Exception("Failure in constraint eval stage: unable to solve")
-            else:
-              print len(x.set)
+              raise Exception("Failure in constraint eval stage: cell has no possible values")
 
         logging.debug("Begining speculative evaluation")
         unsatisfied = self._unsatisfied = [c for c in constraints if any(len(x.set) > 1 for x in c[1:])]
-        space = 1
+
+        brute_force_size = 1
         for c in unsatisfied:
           for x in c[1:]:
             if len(x.set) > 0:
-              space *= len(x.set)
-        logging.debug("Search size: %d" % space)
+              brute_force_size *= len(x.set)
+        logging.debug("Search size: %d" % brute_force_size)
 
-        if space > 100000:
-          raise Exception("This puzzle is too complex to solve.")
+        self.brute_force_size = brute_force_size
+        self.speedup = self.search_space_size / brute_force_size
+
+        if brute_force_size > BRUTE_FORCE_WARN_LIMIT and not has_timeout:
+          logging.warning("Brute force size of %d is very high", brute_force_size)
 
         cells = []
 
@@ -151,40 +255,83 @@ class Kakuro(object):
               cells.append(x)
 
         try:
-          _recursive_cell_test(constraints, cells, 0)
+          _recursive_cell_test(constraints, cells, 0, self.is_exclusive)
         except Success:
           data = [x.test if isinstance(x, Cell)  else x for x in a]
-          self.data = data
+          logging.debug("Solved in speculative eval phase after %d passes" % i)
+          self._data = data
+          return
         else:
           raise Exception("Unable to solve")
 
-
   def unsolve(self):
     """Removes the solution data from this puzzle leaving the constraints
-    intact. """
-    d = self.data
+    intact."""
+    self._is_solved = False
+
+    d = self._data
     for i in range(len(d)):
       if d[i] and type(d[i]) != type(()):
         d[i] = 1
 
-  @property
-  def is_solved(self):
-    """True if this puzzle is solved correctly, False if it is not."""
-    return verify_solution(self.data, self.x_size)
+  def check_solution(self):
+    """Raises an exception if this puzzle is unsolved or has an invalid
+    solution.
 
-def _verify_input_integrity(data, x_size):
-  if len(data) % x_size != 0:
-    raise MalformedBoardException("The input data must be square in shape.")
+    This function algorithmically verifies the solution is correct, so it may
+    raise an exception after solve() returned successfully if there is a bug
+    in the solving algorithm."""
+    if not self._is_solved:
+      raise SolutionUnsolvedException()
 
-  for x in data:
-    if (type(x) != type(0)) and (type(x) != type(())):
-      raise MalformedBoardException("Only tuples and integers are allowed in "
-                                    "the input.")
+    def is_entry_square(cell):
+      return cell != 0 and type(cell) == type(1)
 
+    def fail_debug():
+      logging.debug("failed puzzle data:\n" + str(self))
+
+    constraints = _generate_constraints(self._data, self._x_size, is_entry_square)
+
+    # TODO: better error reporting for all of these
+    if not all(x[0] == sum(y for y in x[1:]) for x in constraints):
+      raise SolutionInvalidSumException()
+
+    if self.is_exclusive:
+      if not all(len(x[1:]) == len(set(x[1:])) for x in constraints):
+        fail_debug()
+        raise SolutionNonUniqueException()
+
+    if any(any(val > self.max_val for val in x[1:]) for x in constraints):
+      fail_debug()
+      raise SolutionRangeException()
+
+    if any(any(val < self.min_val for val in x[1:]) for x in constraints):
+      fail_debug()
+      raise SolutionRangeException()
+
+  def check_puzzle(self):
+    """Raises an exception if puzzle is not valid."""
+    if len(self._data) % self._x_size != 0:
+      raise InvalidPuzzleDataLengthException("The input data must be square in shape.")
+
+    for x in self._data:
+      if (type(x) != type(0)) and (type(x) != type(())):
+        raise InvalidPuzzleDataException("Only tuples and integers are allowed in "
+                                         "the input.")
+
+    def is_entry_square(cell):
+      return cell != 0
+
+    # TODO: for some reason this function modifies the first arg passed; fix
+    # it so it doesn't and then the deepcopy can be removed.
+    constraints = _generate_constraints(copy.deepcopy(self._data), self.x_size, is_entry_square)
+
+    if any(len(c) < 2 for c in constraints):
+      raise ConstraintWithoutEntryCellException("Constraint without entry square.")
 
 def pretty_print(data, x_size):
   """Draws a prettier version of puzzle strings"""
-  _verify_input_integrity(data, x_size)
+  #_verify_input_integrity(data, x_size)
 
   strings = []
   for x in data:
@@ -204,28 +351,18 @@ def pretty_print(data, x_size):
   return '\n'.join((row_strings))
 
 def _is_solved(constraints):
-    return all(all(len(x.set) == 1 for x in c[1:]) for c in constraints)
+  return all(all(len(x.set) == 1 for x in c[1:]) for c in constraints)
 
 class Success(Exception): pass
 
-def _recursive_cell_test(constraints, cells, n):
+def _recursive_cell_test(constraints, cells, n, is_exclusive):
   try:
     for i in cells[n].set:
       cells[n].test = i
-      _recursive_cell_test(constraints, cells, n+1)
+      _recursive_cell_test(constraints, cells, n+1, is_exclusive)
   except IndexError:
-    if _are_constraints_satisfied(constraints):
+    if _are_constraints_satisfied(constraints, is_exclusive):
       raise Success
-
-def verify_solution(input, x_size):
-  _verify_input_integrity(input, x_size)
-
-  def is_entry_square(cell):
-    return cell != 0 and type(cell) == type(1)
-
-  constraints = _generate_constraints(input, x_size, is_entry_square)
-
-  return all(x[0] == sum(y for y in x[1:]) for x in constraints)
 
 def rows_from_list(list, x_size):
   return [list[z:z+x_size] for z in range(0,len(list)-x_size+1,x_size)]
@@ -248,8 +385,7 @@ def _generate_constraints(input, x_size, is_entry_square):
   cols = cols_from_list(input, x_size)
 
   constraints = []
-  ACROSS = 0
-  DOWN = 1
+  ACROSS, DOWN = 0, 1
 
   for row in rows:
     constraints.extend(_process_row_or_col(row, ACROSS, is_entry_square))
@@ -259,34 +395,39 @@ def _generate_constraints(input, x_size, is_entry_square):
 
   return constraints
 
+def gen_random(x_size=10, y_size=10, is_solved=True, is_exclusive=True,
+               min_val=1, max_val=9, seed=None):
+  """Generates a new random Kakuro puzzle of the specified size.  If a
+  ``seed`` is provided, output is deterministic when all other parameters are
+  also the same. Providing a seed is recommended."""
 
-def row(a, x_size, n):
-  return a[x_size*n:(x_size+1)*n]
+  def row(a, x_size, n):
+    return a[x_size*n:x_size*(n+1)]
 
-def col(a, x_size, n):
-  return a[n:len(a):x_size]
+  def col(a, x_size, n):
+    return a[n:len(a):x_size]
 
-def new_puzzle(x_size, y_size, difficulty=3, seed=None):
-  """Generates a new (solved) Kakuro of the specified size. ``Difficulty`` is
-  an integer from 1 to 9 that affects various parameters in the generation; 1
-  is very easy and 9 is the hardest. If a ``seed`` is provided, the puzzle will
-  be the same every time."""
-
-  import random
-  random.seed(seed)
+  if seed:
+    random.seed(seed)
 
   #s = random.sample(range(1,10),9)
 
   a=[0]*x_size*y_size
-  for i in range(x_size*y_size):
+
+  for idx in range(x_size*y_size):
+    row_idx = idx/x_size
+    col_idx = idx%x_size
     if random.random() > 0.6:
-      j = None
-      for x in range(20):
-        j = random.randint(1,9)
-        # TODO: ok for small boards, but not for big
-        if (j not in row(a, x_size, i/y_size) and
-            j not in col(a, x_size, i%x_size)):
-          a[i] = j
+      # TODO: This works OK for small boards, but not for big ones
+      for _ in range(20):
+        val = random.randint(min_val, max_val)
+        if is_exclusive:
+          if (val not in row(a, x_size, row_idx) and
+              val not in col(a, x_size, col_idx)):
+            a[idx] = val
+            break
+        else:
+          a[idx] = val
           break
 
   # 0-out top and left
@@ -300,10 +441,10 @@ def new_puzzle(x_size, y_size, difficulty=3, seed=None):
       if a[i]:
         sum += a[i]
       elif sum:
-        a[i] = (sum, 0)
+        a[i] = sum, 0
         sum = 0
 
-  # add tuples and down rules, modify existing tuples if necessary
+  # add tuples and down rules; modify existing tuples if necessary
   sum = 0
   for x in range(0, x_size):
     for i in range(len(a) - x_size + x, -1, -x_size):
@@ -311,21 +452,31 @@ def new_puzzle(x_size, y_size, difficulty=3, seed=None):
         sum += a[i]
       elif sum:
         if type(a[i]) == type(()):
-          a[i] = (a[i][0], sum)
+          a[i] = a[i][0], sum
         else:
-          a[i] = (0, sum)
+          a[i] = 0, sum
         sum = 0
 
+  k=Kakuro(x_size, a, min_val, max_val, is_exclusive)
+  if not is_solved:
+    k.unsolve()
 
-  return Kakuro(data=a, x_size=x_size)
+  k._is_solved = is_solved
+  return k
 
+def _are_constraints_satisfied(constraints, check_uniq):
+  return (_are_constraint_sums_valid(constraints) and
+          (_are_vals_unique(constraints) if check_uniq else True))
 
-
-
-def _are_constraints_satisfied(constraints):
+def _are_constraint_sums_valid(constraints):
   return all(x[0] == sum(y.test for y in x[1:]) for x in constraints)
 
-class MalformedBoardException(Exception): pass
+def _are_vals_unique(constraints):
+  for c in constraints:
+    vals = [x.test for x in c[1:]]
+    if len(vals) != len(set(vals)):
+      return False
+  return True
 
 def _process_row_or_col(record, row_or_col, is_entry_square):
   constraints = []
@@ -339,10 +490,9 @@ def _process_row_or_col(record, row_or_col, is_entry_square):
         constraint = [sum_val]
         cell = record.pop()
         if not is_entry_square(cell):
-          print cell
-          print type(cell)
+          print record
           msg = "Found constraint '%d' without adjacent entry cell." % constraint[0]
-          raise MalformedBoardException(msg)
+          raise ConstraintWithoutEntryCellException(msg)
         constraint.append(cell)
         try:
           while True:
@@ -369,7 +519,7 @@ def get_vals(sum_val, n):
 
   >>> get_vals(7, 3)
   [(1, 2, 4)]
-  """ 
+  """
   return [x for x in combinations(range(1, sum_val),n) if
           sum(x) == sum_val and all(y<10 for y in x)]
 
@@ -412,7 +562,7 @@ def get_set(sum_val, n):
 
   >>> get_set(7, 3)
   set(1, 2, 4)
-  """ 
+  """
   if n == 1: return set((sum_val,))
 
   def flatten(listOfLists):
@@ -452,15 +602,11 @@ def _remove_invalid_sums(cells, sum_val):
   for old, new in zip(cells, new_sets):
     old.set &= set(new)
 
-def _iterate(constraints):
+def _iterate(constraints, is_exclusive):
   """The strategy is to run this repeatedly until it stops making progress.
   Sloppy, but effective."""
   for c in constraints:
     sum_val, cells = c[0], c[1:]
-    if IDENTICAL_EXCLUSION:
+    if is_exclusive:
       _remove_duplicates(cells)
     _remove_invalid_sums(cells, sum_val)
-
-# Staging area for ipython code. Automatically runs when %run is used
-#a=new_puzzle(25,25,5)
-#a.unsolve()
