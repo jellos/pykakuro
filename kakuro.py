@@ -21,19 +21,37 @@
 #
 # Various options affect the solving routines:
 
-BRUTE_FORCE_WARN_LIMIT = 10**11
+BRUTE_FORCE_WARN_LIMIT = 5*10**5
 
 #############################################################################
 
-import logging
 import copy
-import random
-import threading
-import thread
-
 import itertools
+import logging
+import math
+import operator
+import random
+import thread
+import threading
+import cPickle
 
-#logging.basicConfig(level=logging.DEBUG)
+from itertools import combinations, chain
+from pprint import pprint
+
+from collections import Counter
+
+try:
+  with open('.set_cache', 'r') as f:
+    get_set_cache = cPickle.load(f)
+except IOError:
+  logging.warning(".set_cache file not found... solving will be slow until "
+                  "necessary get_set() entries are generated.")
+  get_set_cache = {}
+
+logging.basicConfig(level=logging.DEBUG)
+
+def product(lst):
+  return reduce(operator.mul, lst)
 
 class MalformedPuzzleException(Exception):
   """The puzzle was not a valid Kakuro puzzle."""
@@ -68,7 +86,8 @@ class SolutionRangeException(SolutionInvalidException):
   allowed by the puzzle (the default range is 1 to 9)."""
 
 class SearchTimeExceeded(Exception):
-  """Raised by the solver if the puzzle is taking too long to solve."""
+  """Raised by the solver if the puzzle solution time has exceeded
+  a user-specified Timeout."""
 
 class Cell(object):
   """Represents a single cell inside a Kakuro puzzle.
@@ -85,11 +104,30 @@ class Cell(object):
     self.test = 0
 
   def __repr__(self):
-    if len(self.set) == 1:
-      for x in self.set:
-        return "Cell(%d)" % x
+    try:
+      return "<%s>" % ("".join(str(x) for x in sorted(self.set)))
+    except AttributeError:
+      return "<%d>" % self.test
 
-    return "Cell(%s)" % list(self.set)
+class Solution(object):
+  """Represents a single solution to a Kakuro puzzle."""
+
+  def get_html(self):
+    """Generates an HTML representation of this solution."""
+
+  def get_svg(self):
+    """Generates an SVG representation of this solution."""
+
+  def get_txt(self):
+    """Generates a plain text representation of this solution."""
+    return pretty_print(self.data, self.puzzle.x_size)
+
+  def __init__(self, puzzle, data):
+    self.puzzle = puzzle
+    self.data = tuple(data)
+
+  def __str__(self):
+    return '<Kakuro solution at %s>' % (hex(id(self)))
 
 class Kakuro(object):
   """Creates a new Kakuro puzzle.
@@ -97,44 +135,49 @@ class Kakuro(object):
   Parameters (max_val, is_exclusive, etc) should not change after a puzzle is
   created."""
   def __str__(self):
-    return pretty_print(self.data, self.x_size)
-
-  def __repr__(self):
     return '<%dx%d Kakuro puzzle, %s, at %s>' % (
             self.x_size,
             len(self.data)/self.x_size,
-            "solved" if self._is_solved else "unsolved",
+            "solved" if self.is_solved else "unsolved",
             hex(id(self)),
         )
+
+  def __iter__(self):
+    return self._next_solution(has_timeout=False)
+
   def __init__(self, x_size, data, min_val=1, max_val=9, is_exclusive=True):
     self.data = data
 
+    # No solutions yet
+    self.solutions = []
+
+    self.x_size = x_size
     if x_size < 1:
       raise ValueError("x_size must be greater than 0.")
 
-    self.x_size = x_size
-
+    self.min_val = min_val
     if max_val < min_val:
       raise ValueError("max_val must be greater than or equal to min_val.")
 
-    self.min_val = min_val
-
     self.max_val = max_val
-
     self.is_exclusive = is_exclusive
-
-    self._is_solved = False
+    self.is_solved = False
 
     self.num_entry_squares = (
       sum(1 for c in self.data if type(c) == type(0) and c > 0)
     )
-    """Total number of entry squares in this puzzle."""
 
     val_size = self.max_val - self.min_val + 1
     self.search_space_size = val_size**self.num_entry_squares
 
+    logging.debug(
+      "Puzzle search space size: %d^%d",
+      val_size,
+      self.num_entry_squares,
+    )
+
   def solve(self, timeout=None, timeout_exception=True):
-    """Attempts to solve this puzzle.
+    """Attempts to find all possible solutions for this puzzle.
 
     If a timeout (number of seconds) is provided, will raise an exception if
     the puzzle is not yet solved after that amount of time. If
@@ -155,7 +198,10 @@ class Kakuro(object):
 
     try:
       self._solve(bool(timeout))
-      self._is_solved = True
+      self.is_solved = True
+      self.speedup = self.search_space_size / self.brute_force_size
+      self.difficulty = (0.05 * math.log(self.brute_force_size) +
+                         0.01 * self.num_entry_squares)
       if timeout:
         t.done = True
       return True
@@ -168,12 +214,17 @@ class Kakuro(object):
       else:
         return False
 
-  def _solve(self, has_timeout):
-    # TODO: not solving is_exclusive=False puzzles correctly
+  def get_html(self):
+    """Generates HTML representation of unsolved puzzle."""
 
-    if self._is_solved:
-      raise Exception("Already solved")
+  def get_svg(self):
+    """Generates SVG representation of unsolved puzzle."""
 
+  def get_txt(self):
+    """Generates plain text representation of unsolved puzzle."""
+    return pretty_print(self.data, self.x_size)
+
+  def _next_solution(self, has_timeout):
     input = self.data
     x_size = self.x_size
 
@@ -190,87 +241,114 @@ class Kakuro(object):
       return isinstance(cell, Cell)
 
     constraints = _generate_constraints(a, x_size, is_entry_square)
-    self._constraints = constraints
 
     _first_run(constraints)
-    self._initial_constraints = copy.deepcopy(constraints)
 
-    for i in range(200):
+    # Even very complex puzzles rarely require more than 20 passes, but we'll
+    # give it up to 100
+    for i in xrange(1, 100):
+      logging.debug("Starting constraint pass %d", i)
+      logging.debug("Search size: %e", search_space_size(constraints))
       old = str(constraints)
       _iterate(constraints, self.is_exclusive)
 
-      if _is_solved(constraints):
-        logging.debug("Solved in constraint eval phase after %d passes" % i)
-        data = [x.set.copy().pop() if isinstance(x, Cell)  else x for x in a]
-        self.data = data
+      if is_solved(constraints):
+        logging.debug("Solved in constraint eval phase after %d passes", i)
+        self.brute_force_size = 1
+        yield Solution(self, (x.set.copy().pop() if isinstance(x, Cell) else x for x in a))
         return
 
       if old == str(constraints):
         # Was unable to improve constraints any further; must brute force now.
-        for c in constraints:
-          for x in c[1:]:
-            if len(x.set) == 0:
-              raise Exception("Failure in constraint eval stage: cell has no possible values")
+        logging.debug("Constraints fixed after %d iterations", i)
+        break
+    else:
+      raise Exception("Failure in constraint eval stage: too many iterations")
 
-        logging.debug("Begining speculative evaluation")
-        unsatisfied = self._unsatisfied = [c for c in constraints if any(len(x.set) > 1 for x in c[1:])]
+    logging.debug("Brute forcing remaining possibilities")
 
-        brute_force_size = 1
-        for c in unsatisfied:
-          for x in c[1:]:
-            if len(x.set) > 0:
-              brute_force_size *= len(x.set)
-        logging.debug("Search size: %d" % brute_force_size)
+    unsatisfied_constraints = [c for c in constraints if any(len(x.set) > 1 for x in c[1])]
+    logging.debug("%d unsatisfied constraints", len(unsatisfied_constraints))
 
-        self.brute_force_size = brute_force_size
-        self.speedup = self.search_space_size / brute_force_size
+    brute_cells = set()
 
-        if brute_force_size > BRUTE_FORCE_WARN_LIMIT and not has_timeout:
-          logging.warning("Brute force size of %d is very high", brute_force_size)
-
-        cells = []
-
-        # set .tests
-        for c in constraints:
-          for x in c[1:]:
-            if len(x.set) == 1:
-              x.test = x.set.pop()
-
-
-        for c in unsatisfied:
-          for x in c[1:]:
-            if len(x.set) > 1:
-              cells.append(x)
-
+    for _, cells in unsatisfied_constraints:
+      for cell in cells:
         try:
-          _recursive_cell_test(constraints, cells, 0, self.is_exclusive)
-        except Success:
-          data = [x.test if isinstance(x, Cell)  else x for x in a]
-          logging.debug("Solved in speculative eval phase after %d passes" % i)
-          self.data = data
-          return
+          count = len(cell.set)
+        except AttributeError:
+          # Only one possibility which was already removed by another
+          # constraint
+          pass
         else:
-          raise Exception("Unable to solve")
+          if count == 1:
+            # Only one possibility, so .test value is fixed
+            # (this is the most common outcome)
+            cell.test = cell.set.pop()
+            del cell.set
+          elif count > 1:
+            # multiple possibilities: add this cell to brute_cells
+            brute_cells.add(cell)
+          elif count == 0:
+            # Cell has no possible values so there is no solution
+
+            # TODO: Eventually this should be just "return"... exception should be
+            # raised by solve()
+            raise Exception("No values")
+
+    #pprint(unsatisfied_constraints)
+
+    #raise Exception()
+
+    brute_force_size = product(len(cell.set) for cell in brute_cells)
+    logging.debug("Brute force search size: %d" % brute_force_size)
+
+    self.brute_force_size = brute_force_size
+
+    # If there is no timeout this is probably running interactively and we
+    # should warn the user.
+    if brute_force_size > BRUTE_FORCE_WARN_LIMIT and not has_timeout:
+      logging.warning("Brute force size of %d is very high", brute_force_size)
+
+    # Make sure order of cells is well-defined
+    brute_cells = list(brute_cells)
+
+    # For every cell with more than one possibility, try _all_ values.
+    for seq in itertools.product(*(list(c.set) for c in brute_cells)):
+      for cell, cell_val in zip(brute_cells, seq):
+        cell.test = cell_val
+      if _are_constraints_satisfied(unsatisfied_constraints, self.is_exclusive):
+        logging.debug("Brute force found solution")
+        yield Solution(self, (x.test if isinstance(x, Cell) else x for x in a))
+
+  def _solve(self, has_timeout):
+    # TODO: not solving is_exclusive=False puzzles correctly
+
+    if self.is_solved:
+      raise Exception("Already solved")
+
+    for solution in self._next_solution(has_timeout):
+      self.solutions += [solution]
 
   def unsolve(self):
     """Removes the solution data from this puzzle leaving the constraints
     intact."""
-    self._is_solved = False
+    self.is_solved = False
 
     d = self.data
     for i in range(len(d)):
       if d[i] and type(d[i]) != type(()):
         d[i] = 1
 
-  def check_solution(self):
-    """Raises an exception if this puzzle is unsolved or has an invalid
-    solution.
+  def check_solutions(self):
+    for solution in self.solutions:
+      self.check_solution(solution)
 
-    This function algorithmically verifies the solution is correct, so it may
-    raise an exception after solve() returned successfully if there is a bug
-    in the solving algorithm."""
-    if not self._is_solved:
-      raise SolutionUnsolvedException()
+  def check_solution(self, data):
+    """
+    Algorithmically verifies that a particular solution is correct. Raises an
+    exception if the solution is invalid.
+    """
 
     def is_entry_square(cell):
       return cell != 0 and type(cell) == type(1)
@@ -278,22 +356,22 @@ class Kakuro(object):
     def fail_debug():
       logging.debug("failed puzzle data:\n" + str(self))
 
-    constraints = _generate_constraints(self.data, self.x_size, is_entry_square)
+    constraints = _generate_constraints(data, self.x_size, is_entry_square)
 
     # TODO: better error reporting for all of these
-    if not all(x[0] == sum(y for y in x[1:]) for x in constraints):
+    if not all(val == sum(cells) for val,cells in constraints):
       raise SolutionInvalidSumException()
 
     if self.is_exclusive:
-      if not all(len(x[1:]) == len(set(x[1:])) for x in constraints):
+      if not all(len(cells) == len(set(cells)) for _,cells in constraints):
         fail_debug()
         raise SolutionNonUniqueException()
 
-    if any(any(val > self.max_val for val in x[1:]) for x in constraints):
+    if any(any(cell > self.max_val for cell in cells) for _,cells in constraints):
       fail_debug()
       raise SolutionRangeException()
 
-    if any(any(val < self.min_val for val in x[1:]) for x in constraints):
+    if any(any(cell < self.min_val for cell in cells) for _,cells in constraints):
       fail_debug()
       raise SolutionRangeException()
 
@@ -314,7 +392,7 @@ class Kakuro(object):
     # it so it doesn't and then the deepcopy can be removed.
     constraints = _generate_constraints(copy.deepcopy(self.data), self.x_size, is_entry_square)
 
-    if any(len(c) < 2 for c in constraints):
+    if any(len(cells) < 1 for _,cells in constraints):
       raise ConstraintWithoutEntryCellException("Constraint without entry square.")
 
 def pretty_print(data, x_size):
@@ -338,19 +416,10 @@ def pretty_print(data, x_size):
 
   return '\n'.join((row_strings))
 
-def _is_solved(constraints):
-  return all(all(len(x.set) == 1 for x in c[1:]) for c in constraints)
+def is_solved(constraints):
+  return all(all(len(x.set) == 1 for x in cells) for _,cells in constraints)
 
 class Success(Exception): pass
-
-def _recursive_cell_test(constraints, cells, n, is_exclusive):
-  try:
-    for i in cells[n].set:
-      cells[n].test = i
-      _recursive_cell_test(constraints, cells, n+1, is_exclusive)
-  except IndexError:
-    if _are_constraints_satisfied(constraints, is_exclusive):
-      raise Success
 
 def rows_from_list(list, x_size):
   return [list[z:z+x_size] for z in range(0,len(list)-x_size+1,x_size)]
@@ -449,7 +518,7 @@ def gen_random(x_size=10, y_size=10, is_solved=True, is_exclusive=True,
   if not is_solved:
     k.unsolve()
 
-  k._is_solved = is_solved
+  k.is_solved = is_solved
   return k
 
 def _are_constraints_satisfied(constraints, check_uniq):
@@ -457,85 +526,62 @@ def _are_constraints_satisfied(constraints, check_uniq):
           (_are_vals_unique(constraints) if check_uniq else True))
 
 def _are_constraint_sums_valid(constraints):
-  return all(x[0] == sum(y.test for y in x[1:]) for x in constraints)
+  return all(val == sum(c.test for c in cells) for val,cells in constraints)
 
 def _are_vals_unique(constraints):
-  for c in constraints:
-    vals = [x.test for x in c[1:]]
+  for _, cells in constraints:
+    vals = [c.test for c in cells]
     if len(vals) != len(set(vals)):
       return False
   return True
 
 def _process_row_or_col(record, row_or_col, is_entry_square):
-  constraints = []
+  """Generates all the constraints from a single row or column.
 
-  record.reverse()
+  record: row or column data
+  row_or_col: 0 or 1 depending on whether this is a row or a column
+  is_entry_square: function which tells whether this is an answer cell"""
+  new_constraints = []
+
+  record = list(reversed(record))
   while record:
     cell = record.pop()
-    if type(cell) == type(()):
-      sum_val = cell[row_or_col]
-      if sum_val != 0:
-        constraint = [sum_val]
-        cell = record.pop()
-        if not is_entry_square(cell):
-          print record
-          msg = "Found constraint '%d' without adjacent entry cell." % constraint[0]
-          raise ConstraintWithoutEntryCellException(msg)
-        constraint.append(cell)
-        try:
-          while True:
-            cell = record.pop()
-            if not is_entry_square(cell):
-              record.append(cell) #unpop
-              break
-            constraint.append(cell)
-        except IndexError: pass
-        constraints.append(constraint)
+    if type(cell) != type(()):
+      continue # Not a constraint cell
+    sum_val = cell[row_or_col]
+    if sum_val == 0:
+      continue # No constraint for this direction
+    cell = record.pop()
+    if not is_entry_square(cell):
+      raise ConstraintWithoutEntryCellException(record)
+    cells = [cell]
+    while record:
+      cell = record.pop()
+      if not is_entry_square(cell):
+        record.append(cell) #unpop
+        break
+      cells.append(cell)
+    new_constraints.append((sum_val, cells))
 
-  return constraints
-
-from itertools import combinations
-from itertools import chain
+  return new_constraints
 
 def get_vals(sum_val, n):
   """
-  Returns a list of tuples of all the combinations of n integers that sum to
+  Returns a tuple of tuples of all the combinations of n integers that sum to
   sum_val.
 
   >>> get_vals(10, 3)
-  [(1, 2, 7), (1, 3, 6), (1, 4, 5), (2, 3, 5)]
+  ((1, 2, 7), (1, 3, 6), (1, 4, 5), (2, 3, 5))
 
   >>> get_vals(7, 3)
-  [(1, 2, 4)]
+  ((1, 2, 4))
   """
-  return [x for x in combinations(range(1, sum_val),n) if
-          sum(x) == sum_val and all(y<10 for y in x)]
+  return tuple(x for x in combinations(range(1, sum_val),n) if
+          sum(x) == sum_val and all(y<10 for y in x))
 
-class _memoized(object):
-  """Decorator that caches a function's return value each time it is called.
-  If called later with the same arguments, the cached value is returned, and
-  not re-evaluated.
+def flatten(listOfLists):
+  return list(chain.from_iterable(listOfLists))
 
-  Found at http://wiki.python.org/moin/PythonDecoratorLibrary#Memoize
-  """
-  def __init__(self, func):
-    self.func = func
-    self.cache = {}
-  def __call__(self, *args):
-    try:
-      return self.cache[args]
-    except KeyError:
-      self.cache[args] = value = self.func(*args)
-      return value
-    except TypeError:
-      # uncachable -- for instance, passing a list as an argument.
-      # Better to not cache than to blow up entirely.
-      return self.func(*args)
-  def __repr__(self):
-    """Return the function's docstring."""
-    return self.func.__doc__
-
-@_memoized
 def get_set(sum_val, n):
   """
   Returns the set of integers present in all the combinations of n integers
@@ -550,50 +596,142 @@ def get_set(sum_val, n):
   >>> get_set(7, 3)
   set(1, 2, 4)
   """
-  if n == 1: return set((sum_val,))
+  global get_set_cache
 
-  def flatten(listOfLists):
-    return list(chain.from_iterable(listOfLists))
-  return set(flatten(get_vals(sum_val, n)))
+  try:
+    return get_set_cache[sum_val, n]
+  except KeyError:
+    pass
+
+  if n == 1:
+    # TODO: Should check max_val
+    if sum_val < 10:
+      s = frozenset((sum_val,))
+    else:
+      s = frozenset()
+  else:
+    s = frozenset(flatten(get_vals(sum_val, n)))
+
+  get_set_cache[sum_val, n] = s
+  return s
+
+def _generate_set_cache():
+  """Generates a lookup table for the get_set() function and pickles it to be
+  loaded on future runs. This takes a long time to finish!
+
+  Rather than having end-users build this table we distribute a pre-generated
+  table."""
+  global get_set_cache
+
+  # This covers all the possibilities for standard 1-9 Kakuro, but wider
+  # ranges require a bigger cache.
+
+  # TODO: This only works for is_exclusive=True and assumes a standard spread
+  # 1-9.
+
+  # TODO: This is extremely slow... I guess it's not a high priority though
+  for sum_val in range(1,46):
+    for n in range(1,10):
+      get_set(sum_val, n)
+      print sum_val, n
+
+  with open('.set_cache', 'w') as f:
+    cPickle.dump(get_set_cache, f, cPickle.HIGHEST_PROTOCOL)
 
 def _first_run(constraints):
+  """Assigns set of possible values to each cell based on analysis of
+  constraint value and number of cells. This is very fast as long as
+  get_set_cache is populated.
   """
-  Assigns set of possible values to each cell based on analysis of constraint
-  value and number of cells.
-  """
-  for c in constraints:
-    sum_val = c[0]
-    num_boxes = len(c) - 1
-    for x in c[1:]:
-      x.set &= get_set(sum_val, num_boxes)
+  for sum_val, cells in constraints:
+    s = get_set(sum_val, len(cells))
+    for c in cells:
+      c.set &= s
 
-def _remove_duplicates(cells):
+def _prune_singles(cells):
   """Given a set of cells, if any cells have only 1 possibility, this
-  possibility will be removed from the other cells."""
-  for cell1 in cells:
-    if len(cell1.set) == 1:
-      for cell2 in cells:
-        if cell1 is not cell2:
-          cell2.set -= cell1.set;
+  possibility will be removed from all other cells.
+
+  This is only useful for puzzles where is_exclusive = True.
+
+  This is a special case of _prune_by_count where n=1. It is not needed if
+  _prune_by_count is used."""
+  for check_cell in cells:
+    if len(check_cell.set) == 1:
+      for remove_cell in cells:
+        if check_cell is not remove_cell:
+          remove_cell.set -= check_cell.set;
+
+def _prune_by_count(cells):
+  """Given a set of cells, if any subset of n cells have the same n
+  possibilities, no other cells in the set can have any of those
+  possibilities.
+
+  This is only useful for puzzles where is_exclusive = True.
+
+  Examples:
+    [<123>, <123>, <123>, <12345>] -> [<123>, <123>, <123>, <45>]
+    [<12>, <12>, <1234>, <12345>] -> [<12>, <12>, <34>, <345>]
+  """
+  c=Counter()
+
+  for cell in cells:
+    c[frozenset(cell.set)] += 1
+
+  if len(c) == 1:
+    return
+
+  # TODO: could be more efficient...
+  for cell in cells:
+    count = c[frozenset(cell.set)]
+    len_cell_set = len(cell.set)
+    if count > len_cell_set:
+      raise Exception() # No solutions!
+    if count == len_cell_set:
+      # OK to remove
+      #print "Before: ", cells
+      for remove_cell in cells:
+        if cell.set != remove_cell.set:
+          remove_cell.set -= cell.set
+      #print "After: ", cells
+      #print
+
+def search_space_size(constraints):
+  size = 1.0 # Use floating point to avoid bignum
+  for _, cells in constraints:
+    for c in cells:
+      size *= len(c.set)
+  return size
 
 def _remove_invalid_sums(cells, sum_val):
-  """Adds up all combinations of the integers in the cells and checks which
-  ones sum to sum_val. Removes any integers for which it is impossible to sum
-  to sum_val using that integer in that cell.
+  """Removes any possibilities which have become impossible due to changes in
+  other cells.
 
-  Possibly a bit too clever (and slow) for its own good."""
+  Example:
+    sum_val = 12
+    [<789>, <345789>] -> [<789>, <345>]
+  """
+
   from itertools import product
 
+  #print sum_val
+  #print "Before: ", cells
+
+  # TODO: This is accurate, but the speed could be improved
+
   sets = (cell.set for cell in cells)
-  new_sets = zip(*(seq for seq in product(*sets) if sum(seq)==sum_val))
+  new_sets = zip(*(seq for seq in product(*sets)
+                   if sum(seq)==sum_val and len(seq) == len(set(seq))))
   for old, new in zip(cells, new_sets):
     old.set &= set(new)
 
+  #print "After: ", cells
+  #print
+
 def _iterate(constraints, is_exclusive):
-  """The strategy is to run this repeatedly until it stops making progress.
-  Sloppy, but effective."""
-  for c in constraints:
-    sum_val, cells = c[0], c[1:]
+  """This is run repeatedly until it stops making progress."""
+  for sum_val, cells in constraints:
     if is_exclusive:
-      _remove_duplicates(cells)
+      #_prune_singles(cells)
+      _prune_by_count(cells)
     _remove_invalid_sums(cells, sum_val)

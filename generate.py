@@ -11,7 +11,7 @@ import kakuro
 from multiprocessing import Pool, TimeoutError
 
 def f(i):
-  k = kakuro.gen_random(10, 10, seed=i, is_solved=False)
+  k = kakuro.gen_random(20, 20, seed=i, is_solved=False)
   success = k.solve(timeout=DISCARD_TIMEOUT, timeout_exception=False)
   if success:
     k.check_solution()
@@ -22,4 +22,7 @@ def f(i):
 pool = Pool(POOL_SIZE)
 
 for seed, puzzle in pool.imap_unordered(f, range(PUZZLE_COUNT), 10):
-  print seed, repr(puzzle)
+  if puzzle:
+    print "{0}: {1} {2}".format(seed, repr(puzzle), puzzle.difficulty)
+  else:
+    print "{0}: Too complex".format(seed)

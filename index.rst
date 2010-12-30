@@ -9,6 +9,12 @@ Welcome to pykakuro's documentation!
 pykakuro is a set of python-based tools that can be used to generate and solve
 (some) Kakuro puzzles.
 
+.. warning::
+
+  pykakuro has not had any offical releases yet. As such this documentation
+  may be out-of-date or incomplete and the current version of the code may or
+  may not work. Use at your own risk!
+
 .. currentmodule:: kakuro
 
 Generating puzzles
@@ -149,6 +155,19 @@ Reference
 
       Width of puzzle. (We assume all puzzles are square)
 
+   .. attribute:: difficulty
+
+      A floating point value indicating the anticipated difficulty of this
+      puzzle for a human to solve. It is scaled such that 0.01 is "Very easy"
+      and 1.0 is "Extremely difficult", however values greater than 1.0 are
+      possible.
+
+      Note that the puzzle must have been previously solved with .solve() in
+      order for this value to have been calculated. Otherwise, attempting to
+      access it will raise an AttributeError.
+
+      TODO: make this a property and lazily calculate this value
+
    .. attribute:: min_val
 
       Minimum value allowed in solutions (normally 1)
@@ -189,7 +208,7 @@ Reference
       order for this value to have been calculated. Otherwise, attempting to
       access it will raise an AttributeError.
 
-      TODO: could make this a property and lazily calculate this value
+      TODO: make this a property and lazily calculate this value
 
 .. toctree::
    :maxdepth: 2

@@ -2,3 +2,4 @@ _build
 *.swp
 *.swo
 *.pyc
+prof
