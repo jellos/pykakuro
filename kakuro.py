@@ -23,6 +23,8 @@
 
 BRUTE_FORCE_WARN_LIMIT = 5*10**5
 
+DEBUG = True
+
 #############################################################################
 
 import copy
@@ -35,7 +37,8 @@ import thread
 import threading
 import cPickle
 
-from itertools import combinations, chain
+from itertools import combinations, chain, izip
+from itertools import product as i_product
 from pprint import pprint
 
 from collections import Counter
@@ -48,7 +51,10 @@ except IOError:
                   "necessary get_set() entries are generated.")
   get_set_cache = {}
 
-logging.basicConfig(level=logging.DEBUG)
+if DEBUG:
+  logging.basicConfig(level=logging.DEBUG)
+else:
+  logging.basicConfig(level=logging.INFO)
 
 def product(lst):
   return reduce(operator.mul, lst)
@@ -225,54 +231,50 @@ class Kakuro(object):
     return pretty_print(self.data, self.x_size)
 
   def _next_solution(self, has_timeout):
-    input = self.data
     x_size = self.x_size
 
-    # To make the script more space efficient, each cell can be represented as
-    # an integer and we can use bitwise operations to indicate which integers
-    # are allowed in the slot.  Unfortunately this also makes the code
-    # somewhat harder to read. Set operations are a natural fit for
-    # readability since we are talking about possibilities for each cell.
-    #
-    # The faster method is used in the C speedups.
-    self._cellwise = a = [Cell() if x==1 else x for x in input]
+    data = [Cell() if x==1 else x for x in self.data]
 
     def is_entry_square(cell):
       return isinstance(cell, Cell)
 
-    constraints = _generate_constraints(a, x_size, is_entry_square)
-
+    constraints = _generate_constraints(data, x_size, is_entry_square)
     _first_run(constraints)
 
-    # Even very complex puzzles rarely require more than 20 passes, but we'll
-    # give it up to 100
+    unsat_constraints = list(constraints)
+
+    # Even complex puzzles rarely require more than 40 passes, but we'll give
+    # it up to 100 before we give up and brute force
     for i in xrange(1, 100):
       logging.debug("Starting constraint pass %d", i)
-      logging.debug("Search size: %e", search_space_size(constraints))
-      old = str(constraints)
-      _iterate(constraints, self.is_exclusive)
+
+      for sum_val, cells in unsat_constraints:
+        if self.is_exclusive:
+          _prune_by_count(cells)
+        _remove_invalid_sums(cells, sum_val, i)
+
+      logging.debug("Constraint pass %d finished.", i)
 
       if is_solved(constraints):
         logging.debug("Solved in constraint eval phase after %d passes", i)
         self.brute_force_size = 1
-        yield Solution(self, (x.set.copy().pop() if isinstance(x, Cell) else x for x in a))
+        yield Solution(self, (x.set.copy().pop() if isinstance(x, Cell) else x for x in data))
         return
 
-      if old == str(constraints):
-        # Was unable to improve constraints any further; must brute force now.
-        logging.debug("Constraints fixed after %d iterations", i)
-        break
-    else:
-      raise Exception("Failure in constraint eval stage: too many iterations")
+      unsat_constraints = [c for c in unsat_constraints if any(len(x.set) > 1 for x in c[1])]
 
+      if DEBUG:
+        logging.debug("%d/%d constraints still unsatisfied",
+                      len(unsat_constraints), len(constraints))
+        logging.debug("Remaining search size: %e", _search_space_size(unsat_constraints))
+
+    # Was unable to constrain solution space to one solution, must brute force
+    # now
     logging.debug("Brute forcing remaining possibilities")
-
-    unsatisfied_constraints = [c for c in constraints if any(len(x.set) > 1 for x in c[1])]
-    logging.debug("%d unsatisfied constraints", len(unsatisfied_constraints))
 
     brute_cells = set()
 
-    for _, cells in unsatisfied_constraints:
+    for _, cells in unsat_constraints:
       for cell in cells:
         try:
           count = len(cell.set)
@@ -296,7 +298,7 @@ class Kakuro(object):
             # raised by solve()
             raise Exception("No values")
 
-    #pprint(unsatisfied_constraints)
+    #pprint(unsat_constraints)
 
     #raise Exception()
 
@@ -317,9 +319,9 @@ class Kakuro(object):
     for seq in itertools.product(*(list(c.set) for c in brute_cells)):
       for cell, cell_val in zip(brute_cells, seq):
         cell.test = cell_val
-      if _are_constraints_satisfied(unsatisfied_constraints, self.is_exclusive):
+      if _are_constraints_satisfied(unsat_constraints, self.is_exclusive):
         logging.debug("Brute force found solution")
-        yield Solution(self, (x.test if isinstance(x, Cell) else x for x in a))
+        yield Solution(self, (x.test if isinstance(x, Cell) else x for x in data))
 
   def _solve(self, has_timeout):
     # TODO: not solving is_exclusive=False puzzles correctly
@@ -679,31 +681,25 @@ def _prune_by_count(cells):
     c[frozenset(cell.set)] += 1
 
   if len(c) == 1:
-    return
+    return # All cells have identical choices, nothing to do
 
-  # TODO: could be more efficient...
-  for cell in cells:
-    count = c[frozenset(cell.set)]
-    len_cell_set = len(cell.set)
-    if count > len_cell_set:
-      raise Exception() # No solutions!
-    if count == len_cell_set:
-      # OK to remove
-      #print "Before: ", cells
+  for src_cells_set, count in c.items():
+    if count > len(src_cells_set):
+      raise Exception() # No solutions to puzzle!
+    if count == len(src_cells_set):
+      # We can modify the other cells
       for remove_cell in cells:
-        if cell.set != remove_cell.set:
-          remove_cell.set -= cell.set
-      #print "After: ", cells
-      #print
+        if src_cells_set != remove_cell.set:
+          remove_cell.set -= src_cells_set
 
-def search_space_size(constraints):
-  size = 1.0 # Use floating point to avoid bignum
+def _search_space_size(constraints):
+  size = 1.0 # Use floating point to avoid slow bignum
   for _, cells in constraints:
     for c in cells:
       size *= len(c.set)
   return size
 
-def _remove_invalid_sums(cells, sum_val):
+def _remove_invalid_sums(cells, sum_val, i):
   """Removes any possibilities which have become impossible due to changes in
   other cells.
 
@@ -712,26 +708,21 @@ def _remove_invalid_sums(cells, sum_val):
     [<789>, <345789>] -> [<789>, <345>]
   """
 
-  from itertools import product
+  sets = [cell.set for cell in cells]
 
-  #print sum_val
-  #print "Before: ", cells
+  # The big list comprehension below is a very expensive computation when
+  # there are lots of possibilities for the given set of cells. The cost is
+  # something like n_0 * n_1 * n_2 ... where n_0 is the number of
+  # possibilities in cell 0, and so on. This block calculates that sum and
+  # aborts on sets of cells with big sums when i is small. As i increases,
+  # larger checks are allowed. It saves a lot of wasted compute time for most
+  # puzzles.
+  size = product(len(s) for s in sets)
+  if not 1 < size < 1.7**i+500:
+    return
 
-  # TODO: This is accurate, but the speed could be improved
-
-  sets = (cell.set for cell in cells)
-  new_sets = zip(*(seq for seq in product(*sets)
+  # The reduction work is done in this block. This is an expensive line!
+  new_sets = izip(*(seq for seq in i_product(*sets)
                    if sum(seq)==sum_val and len(seq) == len(set(seq))))
-  for old, new in zip(cells, new_sets):
-    old.set &= set(new)
-
-  #print "After: ", cells
-  #print
-
-def _iterate(constraints, is_exclusive):
-  """This is run repeatedly until it stops making progress."""
-  for sum_val, cells in constraints:
-    if is_exclusive:
-      #_prune_singles(cells)
-      _prune_by_count(cells)
-    _remove_invalid_sums(cells, sum_val)
+  for old, new in izip(cells, new_sets):
+    old.set = set(new)
