@@ -1,4 +1,4 @@
-_build
+doc/_build
 *.swp
 *.swo
 *.pyc
