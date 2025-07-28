@@ -28,23 +28,25 @@ DEBUG = True
 #############################################################################
 
 import copy
+from functools import reduce
 import itertools
 import logging
 import math
 import operator
 import random
-import thread
+import _thread as thread
 import threading
-import cPickle
+import pickle as cPickle
 
-from itertools import combinations, chain, izip
+from itertools import combinations, chain
 from itertools import product as i_product
 from pprint import pprint
 
 from collections import Counter
 
+
 try:
-  with open('.set_cache', 'r') as f:
+  with open('.set_cache', 'rb') as f:
     get_set_cache = cPickle.load(f)
 except IOError:
   logging.warning(".set_cache file not found... solving will be slow until "
@@ -245,7 +247,7 @@ class Kakuro(object):
 
     # Even complex puzzles rarely require more than 40 passes, but we'll give
     # it up to 100 before we give up and brute force
-    for i in xrange(1, 100):
+    for i in range(1, 100):
       logging.debug("Starting constraint pass %d", i)
 
       for sum_val, cells in unsat_constraints:
@@ -454,6 +456,13 @@ def _generate_constraints(input, x_size, is_entry_square):
 
   return constraints
 
+def new_puzzle(x_size, y_size, seed=None, is_solved=True, is_exclusive=True, min_val=1, max_val=9):
+    """
+    Generates a new random Kakuro puzzle of the specified size.
+    This is the documented interface for users.
+    """
+    return gen_random(x_size, y_size, is_solved=is_solved, is_exclusive=is_exclusive, min_val=min_val, max_val=max_val, seed=seed)
+
 def gen_random(x_size=10, y_size=10, is_solved=True, is_exclusive=True,
                min_val=1, max_val=9, seed=None):
   """Generates a new random Kakuro puzzle of the specified size.  If a
@@ -474,8 +483,8 @@ def gen_random(x_size=10, y_size=10, is_solved=True, is_exclusive=True,
   a=[0]*x_size*y_size
 
   for idx in range(x_size*y_size):
-    row_idx = idx/x_size
-    col_idx = idx%x_size
+    row_idx = idx // x_size
+    col_idx = idx % x_size
     if random.random() > 0.6:
       # TODO: This works OK for small boards, but not for big ones
       for _ in range(20):
@@ -635,9 +644,9 @@ def _generate_set_cache():
   for sum_val in range(1,46):
     for n in range(1,10):
       get_set(sum_val, n)
-      print sum_val, n
+      print(sum_val, n)
 
-  with open('.set_cache', 'w') as f:
+  with open('.set_cache', 'wb') as f:
     cPickle.dump(get_set_cache, f, cPickle.HIGHEST_PROTOCOL)
 
 def _first_run(constraints):
@@ -722,7 +731,7 @@ def _remove_invalid_sums(cells, sum_val, i):
     return
 
   # The reduction work is done in this block. This is an expensive line!
-  new_sets = izip(*(seq for seq in i_product(*sets)
+  new_sets = zip(*(seq for seq in i_product(*sets)
                    if sum(seq)==sum_val and len(seq) == len(set(seq))))
-  for old, new in izip(cells, new_sets):
+  for old, new in zip(cells, new_sets):
     old.set = set(new)
